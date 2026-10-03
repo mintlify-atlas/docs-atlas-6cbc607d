@@ -1,5 +1,5 @@
 ---
-title: "GitStatus — git state of a file or folder"
+title: "GitStatus — git state enum for tree files and folders"
 sidebarTitle: "GitStatus"
 description: "GitStatus is the enum representing the git state of a file or folder. For folders, it reflects the highest-priority change found beneath them."
 ---
@@ -35,7 +35,7 @@ deleted  >  modified  >  staged  >  untracked
 
 ## StatusSubscription
 
-`StatusSubscription` is defined alongside `GitStatus` and acts as an opaque handle for the status-callback API.
+`StatusSubscription` is defined alongside `GitStatus` in `FileTreeError.swift` and acts as an opaque handle for the status-callback API.
 
 ```swift
 public struct StatusSubscription: Hashable, Sendable
@@ -44,7 +44,8 @@ public struct StatusSubscription: Hashable, Sendable
 `FileTree.register(path:callback:)` returns a `StatusSubscription`. Pass the same value to `FileTree.unregister(_:)` to stop receiving callbacks. You do not interact with its contents directly.
 
 ```swift title="Registering and unregistering a status callback"
-// Subscribe — throws FileTreeError.pathOutsideRoot if path is not under root.
+// Subscribe — throws FileTreeError.gitDetectionDisabled if detectGit is false,
+// or FileTreeError.pathOutsideRoot if path is not under root.
 let sub = try tree.register(path: root.appending(path: "Sources")) { changes in
     // First delivery: every URL and its GitStatus under the path.
     // Subsequent deliveries: only what changed since the last delivery.

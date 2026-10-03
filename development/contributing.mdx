@@ -1,5 +1,5 @@
 ---
-title: "Build, test, and release SwiftTree"
+title: "SwiftTree contributor guide: build, test, and release"
 sidebarTitle: "Contributing"
 description: "Local dev setup, every make target explained, how the test suite works, the devicon font, and the tagged release workflow for SwiftTree."
 ---
@@ -19,7 +19,7 @@ Every supported operation is a named `make` target. Never invoke `swift build` o
 
 | Target | Command | Purpose |
 |---|---|---|
-| `format-check` | `make format-check` | Lint all sources with `swift format --strict`; exits non-zero on any violation. |
+| `format-check` | `make format-check` | Lint all sources with `swift format lint --strict --recursive`; exits non-zero on any violation. |
 | `format` | `make format` | Rewrite all sources in place to match `swift format` defaults (2-space indent; no `.swift-format` file). |
 | `fonts` | `make fonts` | Download the latest devicon TTF, license, and glyph map into `Sources/SwiftTree/Resources/DevIcons/`. Required before building with devicons enabled. |
 | `build` | `make build` | `swift build` the library. |
@@ -40,11 +40,12 @@ The internal initialiser is the injection point for unit tests:
 ```swift title="Internal init (testing seam)"
 FileTree(
   root: URL,
-  options: FileTreeOptions = .init(),
-  watcher: (any FileWatching)? = nil,
-  lister: (any DirectoryListing)? = nil,
-  git: (any GitRunning)? = nil,
-  onError: @MainActor (FileTreeError) -> Void = { _ in }
+  options: FileTreeOptions,
+  watcher: any FileWatching,
+  lister: @escaping DirectoryLister,
+  git run: @escaping GitRunner = Git.run,
+  devIcons: DevIcons? = nil,
+  onError: @escaping @MainActor (FileTreeError) -> Void = { _ in }
 )
 ```
 

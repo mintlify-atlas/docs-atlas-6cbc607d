@@ -75,25 +75,27 @@ By the end of this guide you will have a working file tree sidebar that colors e
     | `.gitFailed(repo:message:)` | A git command failed for one repo | Fires once per repo until it recovers; other repos are unaffected |
     | `.devIconsUnavailable` | `useDevIcons` is on but the font is missing | Fires once; file rows show the generic `doc` SF Symbol |
 
-    A minimal error handler that shows an alert:
+    A minimal error handler that logs every case:
 
     ```swift Sidebar.swift
-    @State private var lastError: String?
-
     @State private var tree = FileTree(
       root: URL(fileURLWithPath: "/path/to/project"),
-      onError: { [self] error in
+      onError: { error in
         switch error {
         case .gitUnavailable:
-          lastError = "git not found on PATH — install Xcode Command Line Tools."
+          print("git not found on PATH — install Xcode Command Line Tools.")
         case .gitFailed(let repo, let message):
-          lastError = "git failed in \(repo.lastPathComponent): \(message)"
+          print("git failed in \(repo.lastPathComponent): \(message)")
         case .devIconsUnavailable:
-          lastError = "Devicon font missing — run make fonts."
+          print("Devicon font missing — run make fonts.")
+        default:
+          break
         }
       }
     )
     ```
+
+    The `switch` requires a `default` branch because `FileTreeError` has additional cases (`.gitDetectionDisabled`, `.pathOutsideRoot`) that are thrown by the status API but never delivered to `onError`. To surface error messages in your UI, move the tree into an `@MainActor @Observable` model class so `self` is available when the closure is created.
   </Step>
 </Steps>
 

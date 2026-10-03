@@ -1,5 +1,5 @@
 ---
-title: "FileTreeError — non-fatal error cases"
+title: "FileTreeError — error cases for git and status API"
 sidebarTitle: "FileTreeError"
 description: "FileTreeError describes non-fatal errors reported via onError or thrown by the status API. Most errors occur once and recover automatically."
 ---
@@ -18,7 +18,7 @@ public enum FileTreeError: Error, Equatable, Sendable
 |---|---|---|---|
 | `.gitUnavailable` | No usable `git` binary was found on `PATH`. | Once, from `FileTree.init`. | The tree shows no status colors. Manual recovery requires a new `FileTree`. |
 | `.gitFailed(repo: URL, message: String)` | A `git` command for one specific repo failed (e.g. corrupt index, permission error). | Once per repo, until the command succeeds again. Other repos are unaffected. | Automatic — the tree retries on the next file change or after `resume()`. |
-| `.gitDetectionDisabled` | `snapshot(of:)` was called but `FileTreeOptions.detectGit` is `false`. | Thrown, not delivered via `onError`. | Not applicable — this is a programming error. Enable `detectGit` or remove the `snapshot` call. |
+| `.gitDetectionDisabled` | `register(path:callback:)` or `snapshot(of:)` was called but `FileTreeOptions.detectGit` is `false`. | Thrown, not delivered via `onError`. | Not applicable — this is a programming error. Enable `detectGit` or remove the call. |
 | `.pathOutsideRoot(_ url: URL)` | `register(path:callback:)` or `snapshot(of:)` was called with a URL that is not the root or a descendant of it. | Thrown, not delivered via `onError`. | Not applicable — pass a URL within the tree root. |
 | `.devIconsUnavailable` | `useDevIcons` is `true` but the devicon font file is missing or unreadable. | Once, from `FileTree.init`. | File rows fall back to the generic `doc` SF Symbol. Manual recovery requires a new `FileTree` after adding the font. |
 
@@ -26,7 +26,7 @@ public enum FileTreeError: Error, Equatable, Sendable
 
 Two cases are **thrown** rather than delivered through the callback:
 
-- `.gitDetectionDisabled` — thrown by `snapshot(of:)` only. `register(path:callback:)` with `detectGit = false` succeeds without throwing; it simply never calls back.
+- `.gitDetectionDisabled` — thrown by both `register(path:callback:)` and `snapshot(of:)` when `FileTreeOptions.detectGit` is `false`.
 - `.pathOutsideRoot` — thrown by both `register(path:callback:)` and `snapshot(of:)`.
 
 All other cases arrive through the `onError` closure you provide to `FileTree.init`.
@@ -66,7 +66,23 @@ All other cases arrive through the `onError` closure you provide to `FileTree.in
 
 ```swift title="Using the status API — handling thrown errors"
 do {
-    // snapshot throws .gitDetectionDisabled if detectGit is false.
+    // Both register and snapshot throw .gitDetectionDisabled if detectGit is false,
+    // and .pathOutsideRoot if the path is not inside the tree root.
+    let sub = try tree.register(path: sourcesURL) { changes in
+        for (url, status) in changes {
+            print(url.lastPathComponent, status)
+        }
+    }
+} catch FileTreeError.gitDetectionDisabled {
+    print("Enable detectGit in FileTreeOptions to use the status API.")
+} catch FileTreeError.pathOutsideRoot(let url) {
+    print("\(url.path) is not inside the tree root.")
+} catch {
+    print("Unexpected error:", error)
+}
+
+do {
+    // snapshot also throws .gitDetectionDisabled and .pathOutsideRoot.
     let statuses = try await tree.snapshot(of: projectRoot)
     for (url, status) in statuses {
         print(url.lastPathComponent, status)

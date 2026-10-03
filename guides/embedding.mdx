@@ -1,7 +1,7 @@
 ---
-title: "Embed a file tree in your SwiftUI sidebar"
+title: "Embed a SwiftTree file tree in your macOS app sidebar"
 sidebarTitle: "Embedding"
-description: "Wire FileTree and FileTreeView into a macOS NavigationSplitView sidebar, handle clicks, control selection, and host the tree from AppKit."
+description: "Wire FileTree and FileTreeView into a macOS NavigationSplitView sidebar, handle clicks, control selection, and embed in AppKit with NSHostingView."
 ---
 
 A file tree in a macOS app typically lives in the sidebar column of a `NavigationSplitView`, acting as the project navigator your users interact with constantly. SwiftTree splits that work into two pieces: `FileTree` owns all mutable state (which folders are open, what they contain, and their git status), while `FileTreeView` renders that state as a compact, scrollable list of rows. Because `FileTree` is `@Observable`, any SwiftUI view that reads from it automatically re-renders when the tree changes on disk or in git.

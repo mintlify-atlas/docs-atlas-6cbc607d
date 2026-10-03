@@ -1,5 +1,5 @@
 ---
-title: "FileTree — observable file-tree model"
+title: "FileTree — Observable File-Tree Model for macOS 14"
 sidebarTitle: "FileTree"
 description: "FileTree is the @MainActor @Observable model that owns the tree state: loaded folder contents, expansion, git status, and watching."
 ---
@@ -178,8 +178,6 @@ public func register(
 ```
 
 Subscribes to status changes under `path`. The first call delivers a map of every file and folder under `path` with its current status. Subsequent calls deliver only the entries that changed. Returns a `StatusSubscription` token; pass it to `unregister(_:)` to stop receiving callbacks.
-
-When `options.detectGit` is `false`, `register` succeeds but the callback is never invoked.
 
 **Parameters**
 

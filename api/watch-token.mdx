@@ -1,5 +1,5 @@
 ---
-title: "WatchToken — cancellable file watch subscription"
+title: "WatchToken — cancellable FileWatching subscription handle"
 sidebarTitle: "WatchToken"
 description: "WatchToken is the opaque cancellation handle for a FileWatching subscription. Drop it or call cancel() to stop watching; both paths are safe to use."
 ---
@@ -123,9 +123,11 @@ func performOneTimeRead(root: URL, watcher: any FileWatching) {
 | `FileTree` action | Effect on the internal token |
 |---|---|
 | `FileTree.init(…)` | A `WatchToken` is created and stored internally. |
-| `tree.pause()` | The internal token is cancelled and released. |
-| `await tree.resume()` | A new `WatchToken` is created and stored. |
+| `tree.pause()` | The internal tree-watch token is cancelled and released. |
+| `await tree.resume()` | A new tree-watch `WatchToken` is created and stored. |
+
+Git-dir watch tokens are held inside `GitStatusEngine`, one per discovered repository. They are independent of the tree-watch token and remain active across `pause()` and `resume()` — git status continues to update even while the tree is paused.
 
 <Note>
-`tree.pause()` cancels the file-watching subscription but does not affect git status polling — git status continues to update while the tree is paused.
+`tree.pause()` cancels the file-tree-watching subscription but does not affect git status — git-dir watches live inside `GitStatusEngine` and stay on through pause and resume.
 </Note>

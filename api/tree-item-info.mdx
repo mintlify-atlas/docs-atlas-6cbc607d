@@ -1,5 +1,5 @@
 ---
-title: "TreeItemInfo — data passed to click handlers"
+title: "TreeItemInfo — struct passed to click and menu handlers"
 sidebarTitle: "TreeItemInfo"
 description: "TreeItemInfo is the struct passed to onLeftClick and rightClickMenu, giving every click handler the full context of the clicked tree row."
 ---
@@ -28,9 +28,8 @@ public struct TreeItemInfo: Sendable, Hashable
 `TreeItemInfo` is built from state the tree already holds. You can also request it directly at any time — the call never blocks on git:
 
 ```swift title="Fetching info outside a click handler"
-if let info = tree.info(for: url) {
-    print(info.relativePath, info.gitStatus as Any)
-}
+let info = tree.info(for: url)
+print(info.relativePath, info.gitStatus as Any)
 ```
 
 ## Usage example
