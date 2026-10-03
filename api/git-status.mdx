@@ -1,0 +1,64 @@
+---
+title: "GitStatus — git state of a file or folder"
+sidebarTitle: "GitStatus"
+description: "GitStatus is the enum representing the git state of a file or folder. For folders, it reflects the highest-priority change found beneath them."
+---
+
+`GitStatus` is the enum returned by status queries and carried on `TreeItemInfo`. For individual files it reflects the file's own git state. For folders it reflects the highest-priority status among all tracked changes beneath them — a process called rollup — so a deeply nested modification surfaces immediately on every ancestor folder.
+
+## Declaration
+
+```swift
+public enum GitStatus: Sendable, Hashable
+```
+
+## Cases
+
+| Case | Description | Rollup priority |
+|---|---|---|
+| `.unmodified` | No changes relative to HEAD. Rows use the normal text color. | Never rolled up. |
+| `.modified` | File has unstaged edits in the working tree. | 2 — high |
+| `.untracked` | File is not tracked by git. | 4 — lowest of the rolled-up statuses |
+| `.staged` | Changes are present in the index (staged for commit). | 3 |
+| `.deleted` | File has been deleted from the working tree. | 1 — highest |
+| `.ignored` | File matches a `.gitignore` rule. | Never rolled up. |
+
+## Rollup behavior
+
+When computing the status of a folder, SwiftTree walks every file with a non-ignored, non-unmodified status beneath it and propagates the **highest-priority** status upward through every ancestor folder to the repo root. The priority order, from highest to lowest, is:
+
+```
+deleted  >  modified  >  staged  >  untracked
+```
+
+`.ignored` and `.unmodified` never participate in rollup. If no rollup-eligible file is found beneath a folder the folder shows `.unmodified`.
+
+## StatusSubscription
+
+`StatusSubscription` is defined alongside `GitStatus` and acts as an opaque handle for the status-callback API.
+
+```swift
+public struct StatusSubscription: Hashable, Sendable
+```
+
+`FileTree.register(path:callback:)` returns a `StatusSubscription`. Pass the same value to `FileTree.unregister(_:)` to stop receiving callbacks. You do not interact with its contents directly.
+
+```swift title="Registering and unregistering a status callback"
+// Subscribe — throws FileTreeError.pathOutsideRoot if path is not under root.
+let sub = try tree.register(path: root.appending(path: "Sources")) { changes in
+    // First delivery: every URL and its GitStatus under the path.
+    // Subsequent deliveries: only what changed since the last delivery.
+    for (url, status) in changes {
+        print(url.lastPathComponent, status)
+    }
+}
+
+// Later — stop the callback.
+tree.unregister(sub)
+```
+
+## Color mapping
+
+The text color rendered for each status is controlled by `FileTreeOptions.colors`, which holds a `StatusColors` value. `StatusColors.color(for:)` returns `nil` for `.unmodified`, so unmodified rows always keep the normal system text color.
+
+See [StatusColors](/api/status-colors) for the full color reference.

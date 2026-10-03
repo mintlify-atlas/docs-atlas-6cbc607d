@@ -1,0 +1,48 @@
+---
+title: "SwiftTree: IDE-style file tree for macOS SwiftUI apps"
+sidebarTitle: "Introduction"
+description: "SwiftTree is a zero-dependency SwiftUI component that renders an IDE-style file tree with git status colors, devicon glyphs, and FSEvents watching."
+---
+
+SwiftTree is a SwiftUI component for macOS 14+ that renders a project navigator — the kind you find in Xcode or VS Code — inside your own app. It keeps every row colored by its git status, watches the file system for live updates via FSEvents, and displays file-type glyphs sourced from the devicon project. There are no third-party dependencies; everything is built on Apple frameworks and the `git` CLI already on the user's machine.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Git status colors" icon="code-branch">
+    Every file and folder is colored by its git status — modified, untracked, staged, deleted, or ignored — using Zed's One Dark / One Light palette by default, with full per-status override support.
+  </Card>
+  <Card title="FSEvents watching" icon="eye">
+    An FSEventsWatcher re-reads changed directories and refreshes git status in real time. You can pause and resume watching, or share one watcher across multiple trees in the same app.
+  </Card>
+  <Card title="Devicon glyphs" icon="file-code">
+    File rows show language- and tool-specific glyphs from the devicon font. Unmapped files, folders, and symlinks fall back to SF Symbols. The font is fetched separately and is never committed to `main`.
+  </Card>
+  <Card title="Nested repo support" icon="diagram-project">
+    Submodules and nested git repositories are each tracked independently. Set `canHaveMultipleGitRepositories = false` to resolve everything against the outermost repo instead.
+  </Card>
+  <Card title="Inline editing hooks" icon="pencil">
+    The tree provides a first-class row slot for your own rename or create text field. Set `tree.inlineEdit` to `.rename(url)` or `.create(in: folder, isDirectory:)`, supply an `inlineEditor` view builder, and the tree handles layout, indentation, and guides.
+  </Card>
+  <Card title="Headless status API" icon="circle-nodes">
+    Use git status without rendering anything. `tree.register(path:callback:)` delivers a full snapshot followed by incremental diffs, and `tree.snapshot(of:)` returns a one-shot `[URL: GitStatus]` dictionary including deleted files.
+  </Card>
+</CardGroup>
+
+## Requirements
+
+| Requirement | Detail |
+|-------------|--------|
+| **Platform** | macOS 14 (Sonoma) or later |
+| **UI framework** | SwiftUI (AppKit hosts embed `FileTreeView` with `NSHostingView`) |
+| **Git CLI** | `git` 2.30 or later must be available on `PATH` |
+| **Distribution** | Swift Package Manager |
+| **License** | Apache 2.0 |
+
+## Architecture Overview
+
+SwiftTree separates concerns across three types that work together. `FileTreeOptions` is a plain value type you configure before creating the tree — it controls git detection, devicon glyphs, theming, fonts, colors, and indent guides, and is immutable after the tree is initialized. `FileTree` is the `@Observable` model: it owns the directory listings, expanded state, selection, git status engine, and FSEvents watcher, and exposes a small set of mutable properties (`showHiddenFiles`, `theme`, `selection`, `inlineEdit`) that can be changed at runtime. `FileTreeView` is the SwiftUI view that draws the model as a scrollable `LazyVStack` of compact rows; it takes the tree, an `onLeftClick` callback, a `rightClickMenu` view builder, and an optional `inlineEditor` view builder. Because `FileTree` is `@Observable`, any property change — a new git status, a file system event, a theme switch — automatically invalidates exactly the rows that depend on it.
+
+<Note>
+  `.DS_Store` entries are filtered out of every directory listing and are never shown in the tree. `.git` directories are likewise never displayed. Symlinks appear as rows in the tree but are not followed when expanding folders.
+</Note>

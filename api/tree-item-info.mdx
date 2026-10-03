@@ -1,0 +1,59 @@
+---
+title: "TreeItemInfo — data passed to click handlers"
+sidebarTitle: "TreeItemInfo"
+description: "TreeItemInfo is the struct passed to onLeftClick and rightClickMenu, giving every click handler the full context of the clicked tree row."
+---
+
+`TreeItemInfo` is the struct passed to `onLeftClick` and `rightClickMenu`, providing the full context of the clicked row. It carries the entry's URL, its path relative to the tree root, filesystem metadata, and the git status that the tree has already computed — no extra lookups required.
+
+## Declaration
+
+```swift
+public struct TreeItemInfo: Sendable, Hashable
+```
+
+## Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `url` | `URL` | Absolute URL of the entry. |
+| `relativePath` | `String` | Path relative to `FileTree.root`; no leading `/`; empty string for the root itself. |
+| `isDirectory` | `Bool` | `true` for real directories. `false` for symlinks even when the symlink target is a folder. |
+| `isSymlink` | `Bool` | `true` when the entry is a symbolic link. |
+| `repoRoot` | `URL?` | The deepest git repository that contains this entry. `nil` if no repo was found, or if `detectGit` is `false` or git is unavailable. |
+| `gitStatus` | `GitStatus?` | The entry's git status. For directories this is the rolled-up status of all changes beneath them. `nil` whenever `repoRoot` is `nil`. |
+
+## Reading from cached state
+
+`TreeItemInfo` is built from state the tree already holds. You can also request it directly at any time — the call never blocks on git:
+
+```swift title="Fetching info outside a click handler"
+if let info = tree.info(for: url) {
+    print(info.relativePath, info.gitStatus as Any)
+}
+```
+
+## Usage example
+
+```swift title="onLeftClick and rightClickMenu"
+FileTreeView(tree: tree) { item in
+    // item is a TreeItemInfo
+    if !item.isDirectory {
+        openEditor(item.url)
+    }
+} rightClickMenu: { item in
+    Button("Reveal in Finder") {
+        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+    }
+
+    Button("Copy Relative Path") {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.relativePath, forType: .string)
+    }
+
+    if let status = item.gitStatus {
+        Divider()
+        Text("Git: \(String(describing: status))")
+    }
+}
+```

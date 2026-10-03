@@ -1,47 +1,153 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with SwiftTree in Your SwiftUI Sidebar"
+sidebarTitle: "Quickstart"
+description: "Go from zero to a fully working git-aware file tree in a SwiftUI sidebar: create a FileTree, embed FileTreeView, and handle errors."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+By the end of this guide you will have a working file tree sidebar that colors every row by its git status, shows devicon file-type glyphs, and updates itself whenever a file changes on disk — all wired into a single SwiftUI view with fewer than 30 lines of code.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
-
-    ```bash
-    npm install your-package
-    ```
+  <Step title="Install SwiftTree">
+    Follow the [Installation](/installation) guide to add the package dependency and run `make fonts`. Come back here once `swift build` succeeds.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+  <Step title="Create a FileTree">
+    `FileTree` is the `@Observable` model that owns the directory listing, git status engine, and FSEvents watcher. Create it with `@State` so SwiftUI owns its lifetime and the view automatically re-renders when the tree changes.
 
-    ```bash
-    your-cli init
+    ```swift Sidebar.swift
+    import SwiftTree
+    import SwiftUI
+
+    struct Sidebar: View {
+      @State private var tree = FileTree(
+        root: URL(fileURLWithPath: "/path/to/project"),
+        onError: { print("swift-tree:", $0) }
+      )
+      // …
+    }
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+    - **`root`** — the folder to display; the tree starts with it expanded.
+    - **`onError`** — a `@MainActor` closure called for non-fatal errors (git unavailable, a git command failing, or the devicon font missing). The tree continues working after every one of these.
+    - **`options`** — an optional `FileTreeOptions` value (defaults to the IDE-style preset). See the [Customization](/guides/customization) guide.
+    - **`watcher`** — an optional `FileWatching` instance. Omit it and the tree creates its own `FSEventsWatcher`.
+  </Step>
+  <Step title="Embed FileTreeView">
+    `FileTreeView` renders the model as a scrollable list of compact rows. Pass the tree, an `onLeftClick` callback that receives a `TreeItemInfo`, and a `rightClickMenu` view builder for the context menu:
+
+    ```swift Sidebar.swift
+    var body: some View {
+      FileTreeView(tree: tree) { item in
+        // Left click: files select, folders also toggle open.
+        if !item.isDirectory { open(item.url) }
+      } rightClickMenu: { item in
+        Button("Reveal in Finder") {
+          NSWorkspace.shared.activateFileViewerSelecting([item.url])
+        }
+        Button("Copy Relative Path") {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(item.relativePath, forType: .string)
+        }
+      }
+    }
+
+    func open(_ url: URL) { /* open the file in an editor */ }
+    ```
+
+    Each callback receives a `TreeItemInfo` with:
+
+    | Property | Type | Description |
+    |----------|------|-------------|
+    | `url` | `URL` | Absolute URL of the clicked item |
+    | `relativePath` | `String` | Path relative to the tree root |
+    | `isDirectory` | `Bool` | Whether the item is a folder |
+    | `isSymlink` | `Bool` | Whether the item is a symbolic link |
+    | `repoRoot` | `URL?` | The deepest git repo containing this item |
+    | `gitStatus` | `GitStatus?` | Current git status, or `nil` when git is off |
+  </Step>
+  <Step title="Handle errors">
+    The `onError` closure you passed to `FileTree` receives a `FileTreeError`. There are three cases:
+
+    | Error | When it fires | Effect on the tree |
+    |-------|--------------|-------------------|
+    | `.gitUnavailable` | No usable `git` found on `PATH` | Fires once; tree shows no status colors or branch labels |
+    | `.gitFailed(repo:message:)` | A git command failed for one repo | Fires once per repo until it recovers; other repos are unaffected |
+    | `.devIconsUnavailable` | `useDevIcons` is on but the font is missing | Fires once; file rows show the generic `doc` SF Symbol |
+
+    A minimal error handler that shows an alert:
+
+    ```swift Sidebar.swift
+    @State private var lastError: String?
+
+    @State private var tree = FileTree(
+      root: URL(fileURLWithPath: "/path/to/project"),
+      onError: { [self] error in
+        switch error {
+        case .gitUnavailable:
+          lastError = "git not found on PATH — install Xcode Command Line Tools."
+        case .gitFailed(let repo, let message):
+          lastError = "git failed in \(repo.lastPathComponent): \(message)"
+        case .devIconsUnavailable:
+          lastError = "Devicon font missing — run make fonts."
+        }
+      }
+    )
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Complete Example
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+Here is the full `Sidebar` struct, ready to drop into a `NavigationSplitView` or any SwiftUI container:
+
+```swift Sidebar.swift
+import SwiftTree
+import SwiftUI
+
+struct Sidebar: View {
+  @State private var tree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/project"),
+    onError: { error in print("swift-tree:", error) }
+  )
+
+  var body: some View {
+    FileTreeView(tree: tree) { item in
+      // Left click: files select, folders also toggle open.
+      if !item.isDirectory { open(item.url) }
+    } rightClickMenu: { item in
+      Button("Reveal in Finder") {
+        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+      }
+      Button("Copy Relative Path") {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.relativePath, forType: .string)
+      }
+    }
+  }
+
+  func open(_ url: URL) { /* open the file in an editor */ }
+}
+```
+
+<Tip>
+  `FileTreeOptions` lets you configure git detection, devicon glyphs, light/dark theme, per-status colors, font size and family, indent guides, branch name labels, and more — all in one place before you create the tree. See the [Customization](/guides/customization) guide for every option.
 </Tip>
+
+<Note>
+  `FileTree` is `@Observable`, so any change to its properties — a new git status arriving, an FSEvents batch landing, `showHiddenFiles` toggled — automatically invalidates only the SwiftUI views that read those properties. Store the tree with `@State` in the view that owns it so SwiftUI manages the object's lifetime correctly. Do not use `@StateObject`; that is for `ObservableObject`, which `FileTree` does not conform to.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Embedding" icon="window" href="/guides/embedding">
+    Learn how to embed the tree in a NavigationSplitView, a standalone window, or an NSHostingView in an AppKit app.
+  </Card>
+  <Card title="Git Status" icon="code-branch" href="/guides/git-status">
+    Use the headless status API — register for incremental diffs or take one-shot snapshots — without rendering the tree at all.
+  </Card>
+  <Card title="Customization" icon="sliders" href="/guides/customization">
+    Override colors, font, theme, devicons, branch labels, indent guides, and more with FileTreeOptions.
+  </Card>
+</CardGroup>

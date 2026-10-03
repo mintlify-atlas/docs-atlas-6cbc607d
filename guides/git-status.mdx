@@ -1,0 +1,128 @@
+---
+title: "Understanding git status colors and the status API"
+sidebarTitle: "Git Status"
+description: "How SwiftTree detects git status per repo, propagates colors to parent folders, and exposes a headless status API for use without a view."
+---
+
+SwiftTree runs `git status --porcelain=v2` (with `--no-optional-locks` to avoid a feedback loop) per discovered repository and propagates the results up through every parent folder to the tree root. The colors you see in the tree reflect rolled-up status — a folder turns yellow if any modified file lives beneath it, even ten levels deep. Each repo gets its own git-dir watch so that index changes (staging, unstaging) refresh instantly without waiting for a filesystem event on the working tree.
+
+## GitStatus values
+
+Every file and folder in the tree carries one of these values from the `GitStatus` enum:
+
+| Case | Meaning |
+|---|---|
+| `.unmodified` | Tracked by git, no changes. Rows render in the normal text color. |
+| `.modified` | Tracked file with working-tree changes (edit, permissions change, merge conflict). |
+| `.untracked` | Not tracked and not ignored. New files you haven't staged yet. |
+| `.staged` | Changes are in the index (added, modified, or renamed). |
+| `.deleted` | File was tracked but has been deleted from the working tree. |
+| `.ignored` | Matched by `.gitignore`. Shown in a muted gray by default. |
+
+<Note>
+`GitStatus` is read from `TreeItemInfo.gitStatus` in click handlers, or directly from `tree.status(of: url)`. The value is always rolled up for directories — it reflects the highest-priority status of any file inside.
+</Note>
+
+## Status rollup for folders
+
+A folder never has its own git status line; SwiftTree computes one from its children. The priority order, from highest to lowest, is:
+
+1. `.deleted`
+2. `.modified`
+3. `.staged`
+4. `.untracked`
+
+A folder inherits the highest-priority status of any descendant that ranks on that list. `.ignored` and `.unmodified` **never** roll up — a folder full of ignored files shows no color at all. This matches the behavior of Zed and VS Code.
+
+For example, if a folder contains one staged file and one modified file, the folder shows `.modified` (higher priority than `.staged`).
+
+## Nested repository support
+
+When `canHaveMultipleGitRepositories` is `true` (the default), SwiftTree discovers nested repos automatically. A subfolder is treated as a nested repo candidate when git reports it as an untracked-and-ignored `dir/` entry, when it appears in `.gitmodules`, or when it contains a `.git` file or directory. Each discovered repo gets its own `git status` run and its own git-dir watch, so changes inside one repo don't require a full re-scan of the outer repo.
+
+<Info>
+Nested repo discovery also handles git worktrees: `git rev-parse --absolute-git-dir --git-common-dir` is used so the git-dir watch lands on the right path in both regular and worktree checkouts.
+</Info>
+
+## Disabling git detection
+
+Set `options.detectGit = false` to turn off all git integration. No `git` commands will ever run, no colors are shown, and branch labels are suppressed regardless of `showBranchNames`. This is useful for apps that open arbitrary folders unrelated to source control.
+
+```swift title="NoGit.swift"
+var options = FileTreeOptions()
+options.detectGit = false
+
+let tree = FileTree(root: folderURL, options: options)
+```
+
+<Warning>
+With `detectGit = false`, both `tree.snapshot(of:)` and `tree.register(path:callback:)` throw `FileTreeError.gitDetectionDisabled`. No `git` commands run and no status callbacks are ever delivered.
+</Warning>
+
+## Headless status API
+
+You can consume git status without rendering `FileTreeView` at all. The same `FileTree` instance that drives the view also drives two status APIs.
+
+### register / unregister
+
+`register(path:callback:)` delivers the full status map for everything under `path` in its first call, then delivers only the entries that changed in subsequent calls. It returns a `StatusSubscription` you pass to `unregister(_:)` to stop receiving callbacks.
+
+```swift title="StatusSubscription.swift"
+import SwiftTree
+
+let tree = FileTree(root: projectURL)
+
+// Subscribe to changes under the Sources/ directory.
+let sourcesURL = projectURL.appending(path: "Sources")
+let subscription = try tree.register(path: sourcesURL) { changes in
+    // First call: [URL: GitStatus] for every file and folder under Sources/.
+    // Subsequent calls: only entries whose status changed.
+    for (url, status) in changes {
+        print(url.lastPathComponent, "→", status)
+    }
+}
+
+// Later, when you no longer need updates:
+tree.unregister(subscription)
+```
+
+<Note>
+`register(path:callback:)` throws `FileTreeError.pathOutsideRoot` if `path` is not the root or a descendant of it, and throws `FileTreeError.gitDetectionDisabled` if `detectGit` is `false`.
+</Note>
+
+### snapshot
+
+`snapshot(of:)` is an `async throws` function that returns a `[URL: GitStatus]` dictionary for everything under the given path, including tracked files that have been deleted from disk (files that exist in the index but not on the filesystem).
+
+```swift title="Snapshot.swift"
+import SwiftTree
+
+let tree = FileTree(root: projectURL)
+
+Task {
+    do {
+        let statuses = try await tree.snapshot(of: projectURL)
+        for (url, status) in statuses where status == .modified {
+            print("Modified:", url.relativePath)
+        }
+    } catch FileTreeError.pathOutsideRoot(let url) {
+        print("Path is outside the tree root:", url.path)
+    } catch FileTreeError.gitDetectionDisabled {
+        print("Git detection is off; enable detectGit in FileTreeOptions.")
+    }
+}
+```
+
+`snapshot(of:)` waits for the first full git status load to complete before returning, so you always get a complete picture even if you call it immediately after creating the tree.
+
+### Status API summary
+
+| Method | Returns | Throws |
+|---|---|---|
+| `register(path:callback:)` | `StatusSubscription` | `.pathOutsideRoot`, `.gitDetectionDisabled` |
+| `unregister(_:)` | `Void` | never |
+| `snapshot(of:)` | `[URL: GitStatus]` | `.pathOutsideRoot`, `.gitDetectionDisabled` |
+
+<Tip>
+`snapshot` includes deleted tracked files — files that `git ls-files` knows about but `FileManager` no longer finds on disk. This makes it useful for building a "changed files" list before a commit, where you want to surface deletions alongside edits.
+</Tip>

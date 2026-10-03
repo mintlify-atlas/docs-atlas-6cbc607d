@@ -1,0 +1,91 @@
+---
+title: "StatusColors — per-status text colors for rows"
+sidebarTitle: "StatusColors"
+description: "StatusColors controls the row text color for each git status. The built-in zed preset matches Zed's adaptive One Dark / One Light palette."
+---
+
+`StatusColors` controls the text color applied to each tree row based on its git status. Pass a value to `FileTreeOptions.colors` before creating a `FileTree`. The default is `StatusColors.zed`, which matches the Zed editor's adaptive One Dark / One Light palette and automatically switches with the system appearance.
+
+## Declaration
+
+```swift
+public struct StatusColors: Sendable
+```
+
+## Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `modified` | `Color` | Color applied to rows with `.modified` status. |
+| `untracked` | `Color` | Color applied to rows with `.untracked` status. |
+| `staged` | `Color` | Color applied to rows with `.staged` status. |
+| `deleted` | `Color` | Color applied to rows with `.deleted` status. |
+| `ignored` | `Color` | Color applied to rows with `.ignored` status. |
+
+Rows with `.unmodified` status always use the normal system text color. `color(for: .unmodified)` returns `nil`.
+
+## Initializers
+
+### Explicit per-status
+
+```swift
+public init(modified: Color, untracked: Color, staged: Color, deleted: Color, ignored: Color)
+```
+
+Sets every status to a distinct color.
+
+### All-in-one
+
+```swift
+public init(all color: Color)
+```
+
+Applies `color` to `modified`, `untracked`, `staged`, and `deleted` in one call. `ignored` is set to `StatusColors.zed.ignored` (Zed's adaptive gray) rather than the provided color. Override any individual status after construction if needed.
+
+## Static preset
+
+### `StatusColors.zed`
+
+The Zed editor's One Dark / One Light status colors, switching automatically with the macOS appearance. Zed has no dedicated staged color; SwiftTree uses Zed's rename blue for `.staged`, since a rename is indexed as staged.
+
+| Status | Light mode | Dark mode |
+|---|---|---|
+| `modified` | `#a48819` | `#dec184` |
+| `untracked` | `#669f59` | `#a1c181` |
+| `staged` | `#5c78e2` | `#74ade8` |
+| `deleted` | `#d36151` | `#d07277` |
+| `ignored` | `#7e8086` | `#878a98` |
+
+## Instance method
+
+```swift
+public func color(for status: GitStatus) -> Color?
+```
+
+Returns the `Color` for the given status, or `nil` for `.unmodified`. Use this when you need to apply the same color logic outside the tree (for example, in an inspector or a status bar).
+
+## Configuration examples
+
+```swift title="Three ways to configure StatusColors"
+// 1. Use the built-in Zed preset (default — no code needed).
+var options = FileTreeOptions()
+// options.colors is already StatusColors.zed
+
+// 2. Override a single status on the preset.
+options.colors.modified = .orange
+options.colors.staged = .blue
+
+// 3. One uniform color for every change; ignored keeps Zed's gray.
+options.colors = StatusColors(all: .purple)
+
+// 4. Fully explicit — every status set individually.
+options.colors = StatusColors(
+    modified:  .yellow,
+    untracked: .green,
+    staged:    .blue,
+    deleted:   .red,
+    ignored:   .gray
+)
+
+let tree = FileTree(root: projectRoot, options: options)
+```

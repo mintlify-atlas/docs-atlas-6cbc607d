@@ -1,0 +1,143 @@
+---
+title: "FileWatching — protocol for file system watchers"
+sidebarTitle: "FileWatching"
+description: "FileWatching and FileChangeBatch form the watcher contract FileTree uses to receive batched filesystem change notifications from any source."
+---
+
+`FileWatching` is the protocol that `FileTree` uses to receive filesystem change notifications. Implement it to share a single watcher across your app, or to plug in a completely custom monitoring system — for example, a test double that fires events on demand. `FSEventsWatcher` is the built-in implementation; use a custom conformance only when you need something it cannot provide.
+
+## Protocol declaration
+
+```swift
+public protocol FileWatching: AnyObject, Sendable
+```
+
+`FileWatching` requires both `AnyObject` (class-only) and `Sendable`, so every conformance must be a `final class` (or another reference type) that is safe to use across concurrency domains.
+
+## Required method
+
+```swift
+func watch(_ paths: [URL], onChange: @escaping @Sendable (FileChangeBatch) -> Void) -> WatchToken
+```
+
+Called by `FileTree` with the set of root paths it wants to observe. Your implementation should:
+
+1. Begin monitoring all URLs in `paths`.
+2. Call `onChange` with a `FileChangeBatch` whenever one or more changes are detected under any of those paths.
+3. Return a `WatchToken` whose `onCancel` closure tears down the underlying stream.
+
+The `onChange` closure and the returned `WatchToken` are both `Sendable`, so it is safe to call `onChange` from any thread or dispatch queue.
+
+<Note>
+Dropping the returned `WatchToken` (letting it go out of scope) cancels the subscription via `deinit`. You do not need to call `cancel()` explicitly unless you want to stop watching at a precise moment while the token is still in scope.
+</Note>
+
+---
+
+## FileChangeBatch
+
+`FileChangeBatch` is the value type delivered to every `onChange` call. It groups the URLs that changed in one FSEvents (or equivalent) notification window into a single struct.
+
+### Declaration
+
+```swift
+public struct FileChangeBatch: Sendable
+```
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `paths` | `[URL]` | Changed files and folders. Either spelling of a symlinked root (e.g. `/var` or `/private/var`) works. |
+| `rootChanged` | `Bool` | `true` when a watched path itself was deleted, moved, or recreated. |
+
+### Initializer
+
+```swift
+init(paths: [URL], rootChanged: Bool = false)
+```
+
+`rootChanged` defaults to `false`, so most call sites only need to pass `paths`.
+
+---
+
+## Usage patterns
+
+### Passing a custom watcher to FileTree
+
+```swift
+// FileTree.init signature (watcher parameter)
+FileTree(root: URL,
+         options: FileTreeOptions = .init(),
+         watcher: (any FileWatching)? = nil,
+         onError: @MainActor (FileTreeError) -> Void = { _ in })
+```
+
+Pass any `FileWatching` conformance as the `watcher` argument. When `watcher` is `nil`, `FileTree` creates its own private `FSEventsWatcher`.
+
+### Sharing one FSEventsWatcher across multiple FileTrees
+
+```swift
+let watcher = FSEventsWatcher()
+let treeA = FileTree(root: rootA, watcher: watcher)
+let treeB = FileTree(root: rootB, watcher: watcher)
+```
+
+Both trees receive notifications from the same `FSEventsWatcher` instance. Each call to `watch(_:onChange:)` registers a separate path list and returns an independent `WatchToken`, so the trees are still cancelled independently.
+
+---
+
+## Implementing a custom FileWatching
+
+The example below shows a minimal stub useful in unit tests. It conforms to `FileWatching` but never fires any events, letting you exercise tree construction without touching the filesystem.
+
+```swift title="StubWatcher.swift"
+import Foundation
+import SwiftTree
+
+/// A no-op watcher for use in tests. Never delivers any events.
+final class StubWatcher: FileWatching {
+    func watch(
+        _ paths: [URL],
+        onChange: @escaping @Sendable (FileChangeBatch) -> Void
+    ) -> WatchToken {
+        // Return a token whose cancel closure is a no-op.
+        WatchToken {}
+    }
+}
+
+// Usage in a test:
+let watcher = StubWatcher()
+let tree = FileTree(root: testRoot, watcher: watcher)
+```
+
+To fire a synthetic event from your stub, capture the `onChange` closure and call it on demand:
+
+```swift title="FireableStubWatcher.swift"
+import Foundation
+import SwiftTree
+
+final class FireableStubWatcher: FileWatching {
+    private(set) var fire: (@Sendable (FileChangeBatch) -> Void)?
+
+    func watch(
+        _ paths: [URL],
+        onChange: @escaping @Sendable (FileChangeBatch) -> Void
+    ) -> WatchToken {
+        fire = onChange
+        return WatchToken { [weak self] in self?.fire = nil }
+    }
+}
+
+// Usage in a test:
+let watcher = FireableStubWatcher()
+let tree = FileTree(root: testRoot, watcher: watcher)
+
+// Later, simulate a change:
+let batch = FileChangeBatch(paths: [testRoot.appending(path: "README.md")])
+watcher.fire?(batch)
+```
+
+<Note>
+`WatchToken` drop (deinit) cancels the subscription. If you store the token as a local variable and let it fall out of scope, the `onCancel` closure runs automatically — no explicit `cancel()` call required.
+</Note>

@@ -1,0 +1,118 @@
+---
+title: "Build, test, and release SwiftTree"
+sidebarTitle: "Contributing"
+description: "Local dev setup, every make target explained, how the test suite works, the devicon font, and the tagged release workflow for SwiftTree."
+---
+
+SwiftTree is a single SwiftPM library package with no external dependencies beyond Apple frameworks. The `demo/` subdirectory is a separate package (a path dependency on `..`) so consumers never resolve it. All common tasks — formatting, building, testing, launching the demo, and publishing a release — are driven through the `Makefile`, which CI calls directly so a local run is byte-identical to the CI gate.
+
+## Prerequisites
+
+- macOS 14 or later
+- `git` 2.30+ available on `PATH` (the test suite shells out to the real `git` binary)
+- A Swift toolchain that includes `swift build`, `swift test`, and `swift run`
+- `swift-format` (used by the `format-check` and `format` targets)
+
+## Make targets
+
+Every supported operation is a named `make` target. Never invoke `swift build` or `swift test` with extra flags not listed here — the Makefile is the single source of truth that CI and contributors share.
+
+| Target | Command | Purpose |
+|---|---|---|
+| `format-check` | `make format-check` | Lint all sources with `swift format --strict`; exits non-zero on any violation. |
+| `format` | `make format` | Rewrite all sources in place to match `swift format` defaults (2-space indent; no `.swift-format` file). |
+| `fonts` | `make fonts` | Download the latest devicon TTF, license, and glyph map into `Sources/SwiftTree/Resources/DevIcons/`. Required before building with devicons enabled. |
+| `build` | `make build` | `swift build` the library. |
+| `test` | `make test` | `swift test` the library. |
+| `demo` | `make demo [ROOT=…]` | Build and launch the demo app. Optionally opens a specific folder directly. |
+| `demo-test` | `make demo-test` | Build and test the demo package without launching it — the CI gate for the demo. |
+
+## Testing
+
+SwiftTree uses Swift Testing (`import Testing`) throughout. The test suite is hermetic and runs in approximately 2 seconds.
+
+Tests that exercise git status shell out to the **real `git` binary** in temporary directories. This means `git` 2.30+ on `PATH` is a hard prerequisite for running the tests, not just for using the library.
+
+### Testing seam
+
+The internal initialiser is the injection point for unit tests:
+
+```swift title="Internal init (testing seam)"
+FileTree(
+  root: URL,
+  options: FileTreeOptions = .init(),
+  watcher: (any FileWatching)? = nil,
+  lister: (any DirectoryListing)? = nil,
+  git: (any GitRunning)? = nil,
+  onError: @MainActor (FileTreeError) -> Void = { _ in }
+)
+```
+
+Inject `FakeWatcher` (per-subscription `emit`), a fake `GitRunner`, or a counting lister to exercise individual subsystems without touching the filesystem or running real git commands.
+
+To wait for the tree to finish its first full git load before asserting:
+
+```swift title="Await first git load"
+await tree.started?.value
+```
+
+Later async effects (watcher callbacks, re-scans) use the `eventually { }` helper.
+
+## DevIcons
+
+File-type icons come from the [devicon](https://github.com/devicons/devicon) project (MIT license). The font file is **not committed to `main`** — it is `.gitignore`d. Only `Resources/DevIcons/README.md` is committed, because SwiftPM fails the build if a declared `.copy` resource folder is entirely absent.
+
+Each release tag carries the font (see [Release workflow](#release-workflow) below); SwiftPM consumers get it automatically when they resolve a tagged version.
+
+<Note>
+  CI runs `make fonts` before any build or test step. Run it locally too, before
+  your first `make build` or `make test` if you want devicon glyphs to work.
+  Without it, everything still compiles and all tests pass — file rows simply
+  show the generic `doc` SF Symbol and `FileTree` reports `.devIconsUnavailable`
+  once.
+</Note>
+
+```bash title="Fetch the devicon font locally"
+make fonts
+make test
+```
+
+## Release workflow
+
+<Warning>
+  Do **not** push tags by hand. A manually pushed tag points at a commit without
+  the devicon font, so every consumer who resolves that tag gets broken file
+  icons.
+</Warning>
+
+Releases come exclusively from the **Release** workflow in GitHub Actions:
+
+<Steps>
+  <Step title="Trigger the workflow">
+    Go to **Actions → Release → Run workflow** and enter the version as bare
+    semver — for example `0.4.0`. No `v` prefix.
+  </Step>
+  <Step title="Automated checks">
+    The workflow validates the version format and confirms the tag does not
+    already exist, then runs `make fonts`, `make test`, and `make demo-test`.
+  </Step>
+  <Step title="Release commit">
+    On success, the workflow checks out `main` in detached HEAD mode, force-adds
+    the devicon files (which are gitignored on `main`), and creates a commit
+    with the message `Release X.Y.Z (devicon <version>)`.
+  </Step>
+  <Step title="Tag and push">
+    The tag `X.Y.Z` is placed on that release commit and pushed. Only the tag
+    is pushed — `main` is never modified. The GitHub Release is created
+    automatically with generated release notes.
+  </Step>
+</Steps>
+
+The result: every tag carries its own copy of the devicon font, and `main` never does. `ci.yml` has no tag trigger, so the release commit does not re-run CI.
+
+<Note>
+  All URLs inside SwiftTree are constructed with `URL.child(_:)` / `.parent` —
+  never `deletingLastPathComponent()`. The latter appends a trailing slash,
+  which causes silent misses in the `listings` and status dictionaries that use
+  URLs as keys. Keep this invariant when contributing new code.
+</Note>

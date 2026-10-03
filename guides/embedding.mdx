@@ -1,0 +1,154 @@
+---
+title: "Embed a file tree in your SwiftUI sidebar"
+sidebarTitle: "Embedding"
+description: "Wire FileTree and FileTreeView into a macOS NavigationSplitView sidebar, handle clicks, control selection, and host the tree from AppKit."
+---
+
+A file tree in a macOS app typically lives in the sidebar column of a `NavigationSplitView`, acting as the project navigator your users interact with constantly. SwiftTree splits that work into two pieces: `FileTree` owns all mutable state (which folders are open, what they contain, and their git status), while `FileTreeView` renders that state as a compact, scrollable list of rows. Because `FileTree` is `@Observable`, any SwiftUI view that reads from it automatically re-renders when the tree changes on disk or in git.
+
+## FileTree and FileTreeView
+
+`FileTree` is the model. It holds the root URL, loads directory listings lazily, watches for changes via FSEvents, and runs `git status` in the background. `FileTreeView` is a pure SwiftUI view — it draws whatever the model currently says and calls back into your code on interactions. You always create the model first, then hand it to the view.
+
+<Info>
+`FileTree` is `@MainActor` and `@Observable`. Store it with `@State` in the owning view, or as a property on your own `@Observable` model object. Either way SwiftUI's observation engine re-renders only the rows that actually changed.
+</Info>
+
+## Sidebar example
+
+The example below shows a complete `NavigationSplitView` with `FileTreeView` in the sidebar column. It handles left clicks, provides a context menu, and wires up an inline editor placeholder for rename and create operations.
+
+```swift title="Sidebar.swift"
+import SwiftTree
+import SwiftUI
+
+struct Sidebar: View {
+    @State private var tree = FileTree(
+        root: URL(fileURLWithPath: "/path/to/project"),
+        onError: { error in print("swift-tree:", error) }
+    )
+
+    var body: some View {
+        NavigationSplitView {
+            FileTreeView(tree: tree) { item in
+                // Left click: files can be opened; folders also toggle open/closed.
+                if !item.isDirectory {
+                    open(item.url)
+                }
+            } rightClickMenu: { item in
+                if item.isDirectory {
+                    Button("New File") {
+                        tree.setExpanded(item.url, true)
+                        tree.inlineEdit = .create(in: item.url, isDirectory: false)
+                    }
+                    Button("New Folder") {
+                        tree.setExpanded(item.url, true)
+                        tree.inlineEdit = .create(in: item.url, isDirectory: true)
+                    }
+                }
+                if item.url != tree.root {
+                    Button("Rename") { tree.inlineEdit = .rename(item.url) }
+                }
+                Divider()
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                }
+                Button("Copy Relative Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(item.relativePath, forType: .string)
+                }
+            } inlineEditor: { edit in
+                // Replace this with your own NameEditor view (see the Inline Editing guide).
+                EmptyView()
+            }
+            .navigationSplitViewColumnWidth(min: 220, ideal: 280)
+        } detail: {
+            DetailView()
+        }
+    }
+
+    func open(_ url: URL) { /* open the file in your editor */ }
+}
+```
+
+<Note>
+`.git` is never shown in the tree. `.DS_Store` is never shown. Symlinks are listed but not followed — they appear with a link icon and their `isSymlink` flag is `true`, but their contents are not expanded.
+</Note>
+
+## Accessing click info
+
+Both `onLeftClick` and `rightClickMenu` receive a `TreeItemInfo` value describing the clicked row. All properties are available synchronously — they are built from what the tree has already loaded, so a click never waits on git.
+
+| Property | Type | Description |
+|---|---|---|
+| `url` | `URL` | Absolute URL of the item. |
+| `relativePath` | `String` | Path relative to `tree.root`, no leading `/`. Empty for the root itself. |
+| `isDirectory` | `Bool` | `true` for folders. `false` for symlinks, even if the target is a directory. |
+| `isSymlink` | `Bool` | `true` when the entry is a symbolic link. |
+| `repoRoot` | `URL?` | The deepest git repository containing this item. `nil` when git is off or the item is outside any repo. |
+| `gitStatus` | `GitStatus?` | The item's git status (rolled up for folders). `nil` when `repoRoot` is `nil`. |
+
+## Controlling the selection
+
+The highlighted row is `tree.selection`. A left click sets it automatically. You can also set or clear it yourself — for example, to highlight the currently open file when your app launches:
+
+```swift title="SelectProgrammatically.swift"
+// Highlight a file without triggering onLeftClick or toggling any folder.
+tree.selection = someFileURL
+
+// Clear the highlight.
+tree.selection = nil
+```
+
+<Warning>
+Setting `tree.selection` directly does **not** call `onLeftClick` and does **not** toggle a folder open or closed. It only changes which row is highlighted.
+</Warning>
+
+## Controlling expansion
+
+Folders open and close with `setExpanded(_:_:)`. The root folder starts open; all others start collapsed.
+
+```swift title="Expansion.swift"
+// Open a folder programmatically.
+tree.setExpanded(folderURL, true)
+
+// Close it again.
+tree.setExpanded(folderURL, false)
+
+// Check whether it's currently open.
+let open = tree.isExpanded(folderURL)
+```
+
+## AppKit hosting
+
+If your app uses an `NSWindowController` or an `NSViewController` without a SwiftUI entry point, wrap `FileTreeView` in `NSHostingView`:
+
+```swift title="AppKitHost.swift"
+import AppKit
+import SwiftTree
+import SwiftUI
+
+final class SidebarController: NSViewController {
+    private let tree = FileTree(
+        root: URL(fileURLWithPath: "/path/to/project"),
+        onError: { error in print("swift-tree:", error) }
+    )
+
+    override func loadView() {
+        let sidebar = FileTreeView(tree: tree) { item in
+            if !item.isDirectory { self.open(item.url) }
+        } rightClickMenu: { item in
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            }
+        }
+        view = NSHostingView(rootView: sidebar)
+    }
+
+    func open(_ url: URL) { /* … */ }
+}
+```
+
+<Tip>
+`FileTree` is `@Observable`, not `ObservableObject`. You don't need `@StateObject` or `@ObservedObject`. In a pure SwiftUI app, `@State private var tree = FileTree(…)` is the right declaration in the owning view. In an AppKit host, store the tree as a `let` or `var` property on the view controller — SwiftUI's observation engine tracks it through the hosting view automatically.
+</Tip>

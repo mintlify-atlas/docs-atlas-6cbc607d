@@ -1,0 +1,148 @@
+---
+title: "FileTreeView — SwiftUI view for the file tree"
+sidebarTitle: "FileTreeView"
+description: "FileTreeView renders a FileTree as compact, gap-free rows with click handling, context menus, and an inline editor for renaming or creating files."
+---
+
+`FileTreeView` is the SwiftUI view that renders a `FileTree` as flat, compact rows — one for each visible file and folder. It uses a `ScrollView` wrapping a `LazyVStack` rather than `List`, which avoids the AppKit table insets and minimum row heights that prevent true gap-free density. Rows are drawn lazily, so only visible entries are rendered at any given moment.
+
+```swift title="Declaration"
+public struct FileTreeView<RightClickMenu: View, InlineEditor: View>: View
+```
+
+---
+
+## Initializers
+
+### Full initializer
+
+```swift title="FileTreeView.init(tree:onLeftClick:rightClickMenu:inlineEditor:)"
+public init(
+    tree: FileTree,
+    onLeftClick: @escaping @MainActor (TreeItemInfo) -> Void = { _ in },
+    @ViewBuilder rightClickMenu: @escaping @MainActor (TreeItemInfo) -> RightClickMenu,
+    @ViewBuilder inlineEditor: @escaping @MainActor (InlineEdit) -> InlineEditor
+)
+```
+
+Creates a `FileTreeView` with all four parameters. Use this overload when you need both a context menu and an inline editor for renaming or creating files.
+
+---
+
+### Without inline editor
+
+```swift title="FileTreeView.init(tree:onLeftClick:rightClickMenu:)"
+public init(
+    tree: FileTree,
+    onLeftClick: @escaping @MainActor (TreeItemInfo) -> Void = { _ in },
+    @ViewBuilder rightClickMenu: @escaping @MainActor (TreeItemInfo) -> RightClickMenu
+)
+```
+
+Convenience initializer that fixes `InlineEditor` to `EmptyView`. Use this when you need a context menu but do not support inline renaming or creation.
+
+---
+
+### Without right-click menu and inline editor
+
+```swift title="FileTreeView.init(tree:onLeftClick:)"
+public init(
+    tree: FileTree,
+    onLeftClick: @escaping @MainActor (TreeItemInfo) -> Void = { _ in }
+)
+```
+
+Convenience initializer that fixes both `RightClickMenu` and `InlineEditor` to `EmptyView`. Suitable for read-only or navigation-only trees where context menus are not needed.
+
+---
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `tree` | `FileTree` | required | The observable model to render. All state — expansion, selection, git status, theme — is read from here. |
+| `onLeftClick` | `@MainActor (TreeItemInfo) -> Void` | no-op | Called after the row is selected. For folder rows, the folder is toggled open or closed first, then this closure is called. |
+| `rightClickMenu` | `@ViewBuilder @MainActor (TreeItemInfo) -> RightClickMenu` | `EmptyView` | Builds the context menu for a row. An empty `@ViewBuilder` produces no menu, so right-clicking shows nothing. |
+| `inlineEditor` | `@ViewBuilder @MainActor (InlineEdit) -> InlineEditor` | `EmptyView` | Builds your custom name field for `tree.inlineEdit`. Receives the current `InlineEdit` value (`.rename(url)` or `.create(in:isDirectory:)`). |
+
+---
+
+## Behavior
+
+**Left click** — selects the row, setting `tree.selection`. For folder rows, the folder is also toggled open or closed. After both actions, `onLeftClick` is called with the row's `TreeItemInfo`.
+
+**Right-click / control-click** — presents the context menu built by `rightClickMenu` for the tapped row. Providing an empty `@ViewBuilder` (or using a convenience initializer that omits the parameter) produces no menu.
+
+**Inline editing** — while `tree.inlineEdit` is non-nil, `inlineEditor` is drawn in the row. For `.rename(url)`, it replaces the row's label text while keeping the row's icon, indent, and guides. For `.create(in: folder, isDirectory:)`, it appears as the first child row inside the open folder. The tree only provides the layout slot; the host is responsible for committing or cancelling the operation and setting `tree.inlineEdit = nil` when done.
+
+**Theme scoping** — `FileTreeView` applies `tree.theme` via `.environment(\.colorScheme)` scoped only to the tree. A `.dark` tree embedded in a light host window, or vice versa, renders with its own chosen appearance. A `.background(.background)` fill is painted inside the theme environment so the tree's background color matches the theme rather than inheriting from the host.
+
+**Root missing** — when `tree.rootMissing` is `true` (the root folder was deleted or moved while watched), the view shows a `ContentUnavailableView` with the folder path instead of rows.
+
+---
+
+## Example
+
+```swift title="Sidebar.swift"
+import SwiftTree
+import SwiftUI
+
+struct Sidebar: View {
+    @State private var tree = FileTree(
+        root: URL(fileURLWithPath: "/path/to/project"),
+        onError: { error in print("SwiftTree:", error) }
+    )
+
+    var body: some View {
+        FileTreeView(tree: tree) { item in
+            // Left click: open files, folders already toggled.
+            if !item.isDirectory {
+                openFile(item.url)
+            }
+        } rightClickMenu: { item in
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            }
+            Button("Copy Relative Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(item.relativePath, forType: .string)
+            }
+            Button("Rename") {
+                tree.inlineEdit = .rename(item.url)
+            }
+        } inlineEditor: { edit in
+            // edit is InlineEdit: .rename(url) or .create(in:isDirectory:)
+            NameField(
+                placeholder: {
+                    if case .create = edit { return "New name" }
+                    return "Rename"
+                }(),
+                onCommit: { name in
+                    applyEdit(edit, name: name)
+                    tree.inlineEdit = nil
+                },
+                onCancel: {
+                    tree.inlineEdit = nil
+                }
+            )
+        }
+    }
+
+    func openFile(_ url: URL) { /* … */ }
+
+    func applyEdit(_ edit: InlineEdit, name: String) {
+        switch edit {
+        case .rename(let url):
+            let dest = url.deletingLastPathComponent().appending(component: name)
+            try? FileManager.default.moveItem(at: url, to: dest)
+        case .create(let folder, let isDirectory):
+            let dest = folder.appending(component: name)
+            if isDirectory {
+                try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: false)
+            } else {
+                FileManager.default.createFile(atPath: dest.path, contents: nil)
+            }
+        }
+    }
+}
+```

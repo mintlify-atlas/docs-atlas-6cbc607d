@@ -1,0 +1,136 @@
+---
+title: "FileTreeOptions — configure the file tree"
+sidebarTitle: "FileTreeOptions"
+description: "FileTreeOptions is a value type that controls every behavior and appearance aspect of a FileTree: git detection, colors, font, theme, and more."
+---
+
+`FileTreeOptions` is a `Sendable` value type that configures a `FileTree` at creation time. Pass a fully configured options value to `FileTree.init`; options are fixed once the tree is created. To change a setting, build a new `FileTreeOptions` and create a new `FileTree`. Two properties are special: `showHiddenFiles` and `theme` seed live-changeable properties of the same name on the `FileTree` itself, so they can be updated without rebuilding the entire tree.
+
+```swift title="Declaration"
+public struct FileTreeOptions: Sendable
+```
+
+---
+
+## Properties
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `detectGit` | `Bool` | `true` | When `false`, no git commands ever run: no status colors, no branch labels, and the status API throws `.gitDetectionDisabled`. |
+| `canHaveMultipleGitRepositories` | `Bool` | `true` | When `false`, nested repos are ignored and everything resolves against the single repo containing the root. |
+| `showHiddenFiles` | `Bool` | `true` | Initial value of `FileTree.showHiddenFiles`. Dot-named entries are shown or hidden; `.DS_Store` is always excluded regardless of this setting. |
+| `showBranchNames` | `Bool` | `false` | Label each repo-root folder with its current branch name, or the short SHA when HEAD is detached. |
+| `theme` | `ColorScheme` | `.dark` | Light or dark rendering of the tree, independent of the system appearance and the host window. Seeds `FileTree.theme`, which can change after init. |
+| `showIndentGuides` | `Bool` | `true` | Draw a 1 pt vertical line beside the contents of each open folder, aligned to the parent's icon center. Invisible guides still occupy their width so toggling them never shifts the layout. |
+| `fontSize` | `CGFloat` | `12` | Point size of row names and branch labels. Clamped to `8...32`. Row height and indent level scale proportionally with this value. |
+| `fontFamily` | `String?` | `nil` | Font family for row names and branch labels. `nil` uses the system font. An uninstalled family also falls back to the system font. Devicon glyphs always use their own font, regardless of this setting. |
+| `useDevIcons` | `Bool` | `true` | Show devicon file-type glyphs on file rows. Falls back to the generic `doc` SF Symbol when off, when the file type is unmapped, or when the devicon font is missing. |
+| `colors` | `StatusColors` | `StatusColors.zed` | Text color per git status. Unmodified rows always use the normal primary text color. Override individual statuses with `options.colors.modified = .orange`, or replace the whole set. |
+
+<Note>
+  `fontSize` is clamped to `8...32`. Row height and indent are derived from the font size at `RowMetrics` construction time, so both scale automatically when you change this value.
+</Note>
+
+<Note>
+  `fontFamily` falling back to the system font is silent. There is no error for an uninstalled font family. Devicon glyphs always render in their own bundled font regardless of `fontFamily`.
+</Note>
+
+---
+
+## StatusColors
+
+`options.colors` is a `StatusColors` value that maps each git status to a `Color`. Unmodified rows always use the default primary text color and are not configurable.
+
+```swift title="Declaration"
+public struct StatusColors: Sendable {
+    public var modified, untracked, staged, deleted, ignored: Color
+}
+```
+
+### Presets and constructors
+
+**`StatusColors.zed`** — the default. Matches Zed's One Dark / One Light status palette and switches automatically with the system appearance (not with `FileTree.theme`).
+
+| Status | Light | Dark |
+|---|---|---|
+| `modified` | amber `#a48819` | gold `#dec184` |
+| `untracked` | green `#669f59` | sage `#a1c181` |
+| `staged` | blue `#5c78e2` | sky `#74ade8` |
+| `deleted` | red `#d36151` | rose `#d07277` |
+| `ignored` | gray `#7e8086` | muted `#878a98` |
+
+**`StatusColors(modified:untracked:staged:deleted:ignored:)`** — set every status color explicitly.
+
+```swift title="StatusColors explicit init"
+options.colors = StatusColors(
+    modified: .orange,
+    untracked: .green,
+    staged: .blue,
+    deleted: .red,
+    ignored: .gray
+)
+```
+
+**`StatusColors(all:)`** — one color for `modified`, `untracked`, `staged`, and `deleted`. `ignored` keeps `StatusColors.zed`'s adaptive gray.
+
+```swift title="StatusColors(all:)"
+options.colors = StatusColors(all: .orange)
+// options.colors.ignored is still StatusColors.zed.ignored
+```
+
+**Changing a single status after init** — all five properties are mutable, so you can adjust just one after building the rest from a preset:
+
+```swift title="Overriding one status"
+options.colors = StatusColors.zed
+options.colors.staged = .blue
+```
+
+---
+
+## Example
+
+```swift title="ProjectTree.swift"
+import SwiftTree
+import SwiftUI
+
+struct ProjectTree: View {
+    let projectURL: URL
+
+    @State private var tree: FileTree
+
+    init(projectURL: URL) {
+        self.projectURL = projectURL
+
+        var options = FileTreeOptions()
+        options.detectGit = true
+        options.canHaveMultipleGitRepositories = true
+        options.showHiddenFiles = false
+        options.showBranchNames = true
+        options.theme = .dark
+        options.showIndentGuides = true
+        options.fontSize = 13          // clamped to 8...32; row height scales with it
+        options.fontFamily = "SF Mono" // nil falls back to system font
+        options.useDevIcons = true
+
+        // Use Zed colors but swap modified to orange
+        options.colors = StatusColors.zed
+        options.colors.modified = .orange
+
+        _tree = State(initialValue: FileTree(
+            root: projectURL,
+            options: options,
+            onError: { error in
+                print("SwiftTree:", error)
+            }
+        ))
+    }
+
+    var body: some View {
+        FileTreeView(tree: tree) { item in
+            if !item.isDirectory { openFile(item.url) }
+        }
+    }
+
+    func openFile(_ url: URL) { /* … */ }
+}
+```

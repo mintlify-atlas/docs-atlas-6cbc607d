@@ -1,0 +1,80 @@
+---
+title: "InlineEdit — trigger in-row name editing"
+sidebarTitle: "InlineEdit"
+description: "InlineEdit is the enum set on tree.inlineEdit to drive rename and create flows. The tree draws your inlineEditor view; you handle the filesystem work."
+---
+
+`InlineEdit` is the enum set on `tree.inlineEdit` to trigger inline name editing directly inside a tree row. Setting a value tells the tree to draw your `inlineEditor` view — either in place of an existing row's name label (rename), or as a new first-child row inside an open folder (create). The tree handles only the visual placement; all filesystem operations are the host's responsibility.
+
+## Declaration
+
+```swift
+public enum InlineEdit: Equatable, Sendable
+```
+
+## Cases
+
+| Case | Description |
+|---|---|
+| `.rename(_ url: URL)` | Replaces the name label of the row at `url` with your `inlineEditor` view. The folder containing `url` must be expanded for the row to be visible. |
+| `.create(in folder: URL, isDirectory: Bool)` | Inserts a blank new-entry row as the first child of `folder` and draws your `inlineEditor` there. `folder` must be open; if it is closed, open it first with `tree.setExpanded(folder, true)`. |
+
+## Lifecycle
+
+1. Set `tree.inlineEdit` to `.rename` or `.create`.
+2. Your `inlineEditor` view appears in the row. The user types a name.
+3. On commit: perform the filesystem work (`FileManager.moveItem`, `FileManager.createDirectory`, etc.), then set `tree.inlineEdit = nil`.
+4. On cancel: set `tree.inlineEdit = nil` without any filesystem changes.
+5. The FSEvents watcher picks up any filesystem changes and refreshes the tree automatically.
+
+<Note>
+  The tree draws the editor and manages its placement. The host is responsible for all filesystem operations — SwiftTree never calls `FileManager` on your behalf.
+</Note>
+
+<Note>
+  Setting `tree.inlineEdit = .create(in: folder, isDirectory:)` when `folder` is closed will not show the editor until the folder is opened. Call `tree.setExpanded(folder, true)` first so the new row is immediately visible.
+</Note>
+
+## Code example
+
+```swift title="Rename and create from a context menu"
+FileTreeView(tree: tree) { _ in
+    // left-click handler (no-op here)
+} rightClickMenu: { item in
+    Button("Rename") {
+        tree.inlineEdit = .rename(item.url)
+    }
+    Button("New File Here") {
+        // Ensure the folder is open before inserting the create row.
+        let folder = item.isDirectory ? item.url : item.url.deletingLastPathComponent()
+        tree.setExpanded(folder, true)
+        tree.inlineEdit = .create(in: folder, isDirectory: false)
+    }
+    Button("New Folder Here") {
+        let folder = item.isDirectory ? item.url : item.url.deletingLastPathComponent()
+        tree.setExpanded(folder, true)
+        tree.inlineEdit = .create(in: folder, isDirectory: true)
+    }
+} inlineEditor: { edit in
+    NameEditor(edit: edit) { proposedName in
+        // Commit: do the filesystem work, then clear the edit state.
+        switch edit {
+        case .rename(let url):
+            let destination = url.deletingLastPathComponent()
+                .appending(path: proposedName, directoryHint: .notDirectory)
+            try? FileManager.default.moveItem(at: url, to: destination)
+        case .create(let folder, let isDirectory):
+            let newURL = folder.appending(path: proposedName, directoryHint: .notDirectory)
+            if isDirectory {
+                try? FileManager.default.createDirectory(
+                    at: newURL, withIntermediateDirectories: false)
+            } else {
+                FileManager.default.createFile(atPath: newURL.path, contents: nil)
+            }
+        }
+        tree.inlineEdit = nil
+    } cancel: {
+        tree.inlineEdit = nil
+    }
+}
+```

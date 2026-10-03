@@ -1,0 +1,113 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "SwiftTree",
+  "projectDescription": "A SwiftUI file-tree component for macOS that colors entries by git status and watches for live changes on disk and in git.",
+  "theme": "luma",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#DBEAFE",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/embedding",
+              "guides/git-status",
+              "guides/customization",
+              "guides/file-watching",
+              "guides/inline-editing"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/demo-app",
+              "development/contributing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Types",
+            "pages": [
+              "api/file-tree",
+              "api/file-tree-view",
+              "api/file-tree-options"
+            ]
+          },
+          {
+            "group": "Supporting Types",
+            "pages": [
+              "api/tree-item-info",
+              "api/git-status",
+              "api/status-colors",
+              "api/inline-edit",
+              "api/file-tree-error"
+            ]
+          },
+          {
+            "group": "File Watching",
+            "pages": [
+              "api/file-watching",
+              "api/fsevents-watcher",
+              "api/watch-token"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "SwiftUI file-tree view for macOS 14+ with compact, gap-free rows",
+    "Real-time git status colors (modified, untracked, staged, deleted, ignored) per file and folder",
+    "Live FSEvents watching — reflects disk changes and git updates automatically",
+    "Nested git repository support (submodules and worktrees)",
+    "DevIcon font glyphs for hundreds of file types",
+    "Inline rename and create UI hooks — the host provides the field, the tree places it",
+    "Headless status API (register/snapshot) for git status without the view",
+    "No dependencies outside Apple frameworks",
+    "Runtime-changeable theme (light/dark), hidden-file toggle, and selection"
+  ],
+  "publicApiSurface": [
+    "FileTree (class) — root, options, showHiddenFiles, theme, selection, inlineEdit, isPaused, rootMissing",
+    "FileTree.init(root:options:watcher:onError:)",
+    "FileTree.children(of:) -> [TreeNode]",
+    "FileTree.isExpanded(_:) -> Bool",
+    "FileTree.setExpanded(_:_:)",
+    "FileTree.status(of:) -> GitStatus?",
+    "FileTree.branch(of:) -> String?",
+    "FileTree.info(for:) -> TreeItemInfo",
+    "FileTree.register(path:callback:) throws -> StatusSubscription",
+    "FileTree.unregister(_:)",
+    "FileTree.snapshot(of:) async throws -> [URL: GitStatus]",
+    "FileTree.pause()",
+    "FileTree.resume() async",
+    "FileTreeView (struct) — init(tree:onLeftClick:rightClickMenu:inlineEditor:)",
+    "FileTreeOptions (struct) — detectGit, canHaveMultipleGitRepositories, showHiddenFiles, showBranchNames, theme, showIndentGuides, fontSize, fontFamily, useDevIcons, colors",
+    "StatusColors (struct) — .zed, init(modified:untracked:staged:deleted:ignored:), init(all:)",
+    "GitStatus (enum) — unmodified, modified, untracked, staged, deleted, ignored",
+    "TreeItemInfo (struct) — url, relativePath, isDirectory, isSymlink, repoRoot, gitStatus",
+    "InlineEdit (enum) — .rename(URL), .create(in:isDirectory:)",
+    "FileTreeError (enum) — gitUnavailable, gitFailed(repo:message:), gitDetectionDisabled, pathOutsideRoot(_:), devIconsUnavailable",
+    "StatusSubscription (struct)",
+    "FileWatching (protocol) — watch(_:onChange:) -> WatchToken",
+    "FSEventsWatcher (class) — init(latency:), watch(_:onChange:)",
+    "WatchToken (class) — cancel()",
+    "FileChangeBatch (struct) — paths, rootChanged",
+    "TreeNode (struct) — url, name, isDirectory, isSymlink"
+  ]
+}

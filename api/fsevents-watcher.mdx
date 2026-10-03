@@ -1,0 +1,104 @@
+---
+title: "FSEventsWatcher — built-in macOS file watcher"
+sidebarTitle: "FSEventsWatcher"
+description: "FSEventsWatcher wraps macOS FSEvents into the FileWatching protocol, with a configurable latency window that batches rapid changes into single callbacks."
+---
+
+`FSEventsWatcher` is the concrete `FileWatching` implementation bundled with SwiftTree. It creates one FSEvents stream per `watch` call, with a configurable latency window that batches rapid bursts of changes — such as a `git checkout` or an `npm install` — into a single `FileChangeBatch` delivery. Unless you need to share a watcher across multiple trees or provide a custom implementation, `FileTree` will create and manage one of these internally.
+
+## Declaration
+
+```swift
+public final class FSEventsWatcher: FileWatching
+```
+
+`FSEventsWatcher` is `final` and `Sendable`. It can be passed freely across concurrency domains and shared between multiple `FileTree` instances.
+
+## Initializer
+
+```swift
+init(latency: TimeInterval = 0.3)
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `latency` | `TimeInterval` | `0.3` | How long FSEvents batches changes before delivering one event. Lower values mean faster updates but more frequent callbacks. |
+
+---
+
+## Conformance
+
+`FSEventsWatcher` conforms to `FileWatching` and implements:
+
+```swift
+func watch(_ paths: [URL], onChange: @escaping @Sendable (FileChangeBatch) -> Void) -> WatchToken
+```
+
+Each call to `watch` creates a new FSEvents stream scoped to the provided `paths`. The stream runs on a private `DispatchQueue` (`swift-tree.fsevents`). When the returned `WatchToken` is cancelled or deallocated, the stream is stopped, invalidated, and released.
+
+---
+
+## Sharing the watcher
+
+Pass the same `FSEventsWatcher` instance to multiple `FileTree` initializers to share a single object across your app. Each tree still receives its own independent `WatchToken` and its own `onChange` callback.
+
+```swift title="SharedWatcher.swift"
+import SwiftTree
+
+let watcher = FSEventsWatcher()
+
+let projectTree = FileTree(
+    root: URL(filePath: "/path/to/project"),
+    watcher: watcher
+)
+
+let dependenciesTree = FileTree(
+    root: URL(filePath: "/path/to/project/node_modules"),
+    watcher: watcher
+)
+```
+
+Each call to `watch(_:onChange:)` creates a separate FSEvents stream, so the two trees are cancelled independently. The benefit of sharing is that you hold a single object in your app state, and you can configure the latency once for all trees.
+
+<Note>
+If you pass `nil` as the `watcher` parameter, `FileTree` creates its own private `FSEventsWatcher` with the default `0.3` s latency. Pass an explicit instance only when you need a custom latency or shared lifetime.
+</Note>
+
+---
+
+## Choosing a latency
+
+The latency value is passed directly to `FSEventStreamCreate` as the `latency` parameter. FSEvents accumulates filesystem notifications for that window and delivers them in one batch.
+
+| Latency | When to use |
+|---|---|
+| `0.05` s | Fastest response. Best for single-folder trees where the user expects near-instant refresh, such as a focused editor pane. |
+| `0.3` s (default) | Good all-round balance. Batches directory sweeps from operations like `npm install` or `git checkout` into one refresh. |
+| `1`–`5` s | Low-overhead monitoring for large repositories where changes are infrequent and reducing CPU wake-ups matters more than update speed. |
+
+### Example: custom latency with a shared watcher
+
+```swift title="AppWatcher.swift"
+import SwiftTree
+
+// One shared watcher for the whole app, tuned for large repos.
+let watcher = FSEventsWatcher(latency: 1.0)
+
+let treeA = FileTree(
+    root: URL(filePath: "/path/to/large-repo"),
+    watcher: watcher,
+    onError: { error in print("tree-a:", error) }
+)
+
+let treeB = FileTree(
+    root: URL(filePath: "/path/to/large-repo/packages/core"),
+    watcher: watcher,
+    onError: { error in print("tree-b:", error) }
+)
+```
+
+<Tip>
+Use the demo app's **Settings → Watcher** panel (latency 0.05–5 s) to experiment with different values against your actual repository before committing to one in code.
+</Tip>

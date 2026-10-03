@@ -1,0 +1,198 @@
+---
+title: "Add inline rename and create with inlineEdit"
+sidebarTitle: "Inline Editing"
+description: "Use tree.inlineEdit to place a rename field in an existing row or a create field as the first child of an open folder, without touching the filesystem."
+---
+
+SwiftTree doesn't create or rename files — that's your app's job. What it provides is a designated slot inside a row for your own SwiftUI view, typically a `TextField`. Set `tree.inlineEdit` to tell the tree which row to give that slot to, render whatever you like inside it via the `inlineEditor` closure on `FileTreeView`, do the filesystem work yourself when the user commits, then set `tree.inlineEdit = nil` to close it. The file watcher picks up the result and updates the tree automatically.
+
+## InlineEdit cases
+
+`InlineEdit` is a two-case enum:
+
+| Case | Effect |
+|---|---|
+| `.rename(URL)` | The named row replaces its label with your `inlineEditor` view. The icon, indent, and guides remain in place. |
+| `.create(in: URL, isDirectory: Bool)` | A new-entry row appears as the first child of the given folder (which must already be open). Your `inlineEditor` view fills the name slot of that row. |
+
+<Note>
+For `.create`, the folder must be expanded before you set `tree.inlineEdit`. If the folder is collapsed the new-entry row has nowhere to appear. Call `tree.setExpanded(folderURL, true)` first.
+</Note>
+
+## Triggering inline edit
+
+Set `tree.inlineEdit` from a context menu button, a toolbar action, or anywhere else in your app:
+
+```swift title="TriggerEdit.swift"
+import SwiftTree
+
+// From a context menu:
+FileTreeView(tree: tree) { _ in } rightClickMenu: { item in
+    if item.url != tree.root {
+        Button("Rename") {
+            tree.inlineEdit = .rename(item.url)
+        }
+    }
+    if item.isDirectory {
+        Button("New File") {
+            tree.setExpanded(item.url, true)
+            tree.inlineEdit = .create(in: item.url, isDirectory: false)
+        }
+        Button("New Folder") {
+            tree.setExpanded(item.url, true)
+            tree.inlineEdit = .create(in: item.url, isDirectory: true)
+        }
+    }
+} inlineEditor: { edit in
+    NameEditor(edit: edit, commit: { name in
+        commitName(edit, name: name)
+        tree.inlineEdit = nil
+    }, cancel: {
+        tree.inlineEdit = nil
+    })
+}
+```
+
+## Committing and cancelling
+
+SwiftTree does not observe the filesystem for the specific URL you're creating or renaming. The flow is:
+
+<Steps>
+  <Step title="User types a name and presses Enter">
+    Your commit handler fires.
+  </Step>
+  <Step title="Do the filesystem work">
+    Call `FileManager.default.moveItem(at:to:)` (rename) or `FileManager.default.createDirectory(at:withIntermediateDirectories:)` (create). Handle any errors — show them in your UI, not by leaving `inlineEdit` set.
+  </Step>
+  <Step title="Clear inlineEdit">
+    Set `tree.inlineEdit = nil`. The inline field disappears.
+  </Step>
+  <Step title="The watcher takes over">
+    The FSEvents watcher detects the change and re-reads the affected folder. The new or renamed item appears in the tree automatically.
+  </Step>
+</Steps>
+
+To cancel without committing, set `tree.inlineEdit = nil` directly — no filesystem work needed.
+
+## The inlineEditor closure
+
+`FileTreeView` accepts an `inlineEditor` `@ViewBuilder` closure that receives the current `InlineEdit` value and returns your view. It is called once while the inline field is visible. The surrounding row layout — icon, indent guides, horizontal padding — is provided by the tree; you only supply the name field itself.
+
+```swift title="InlineEditorClosure.swift"
+FileTreeView(tree: tree) { item in
+    if !item.isDirectory { open(item.url) }
+} rightClickMenu: { item in
+    Button("Rename") { tree.inlineEdit = .rename(item.url) }
+} inlineEditor: { edit in
+    // `edit` is the current InlineEdit value (.rename or .create).
+    // Return any SwiftUI view here.
+    MyTextField(edit: edit, onCommit: { name in
+        apply(edit, name: name)
+        tree.inlineEdit = nil
+    }, onCancel: {
+        tree.inlineEdit = nil
+    })
+}
+```
+
+## Full demo example
+
+The demo app uses a `NameEditor` struct that pre-fills the current filename on `.rename` and starts empty on `.create`. Enter commits; Escape cancels. This is the exact pattern from the demo source:
+
+```swift title="NameEditor.swift"
+import SwiftTree
+import SwiftUI
+
+/// The tree's inline name field: Enter commits, Escape cancels.
+/// Starts with the current name when renaming, empty when creating.
+struct NameEditor: View {
+    let edit: InlineEdit
+    let commit: (String) -> Void
+    let cancel: () -> Void
+    @State private var name = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField("Name", text: $name)
+            .textFieldStyle(.plain)
+            .focused($isFocused)
+            .onSubmit { commit(name) }
+            .onExitCommand(perform: cancel)
+            .onAppear {
+                if case .rename(let url) = edit { name = url.lastPathComponent }
+                isFocused = true
+            }
+    }
+}
+```
+
+Wire it into `FileTreeView` and handle the commit in your model:
+
+```swift title="ContentView.swift"
+import SwiftTree
+import SwiftUI
+
+struct ContentView: View {
+    @State private var tree = FileTree(root: projectURL)
+
+    var body: some View {
+        FileTreeView(tree: tree) { item in
+            if !item.isDirectory { open(item.url) }
+        } rightClickMenu: { item in
+            if item.isDirectory {
+                Button("New File") {
+                    tree.setExpanded(item.url, true)
+                    tree.inlineEdit = .create(in: item.url, isDirectory: false)
+                }
+                Button("New Folder") {
+                    tree.setExpanded(item.url, true)
+                    tree.inlineEdit = .create(in: item.url, isDirectory: true)
+                }
+            }
+            if item.url != tree.root {
+                Button("Rename") { tree.inlineEdit = .rename(item.url) }
+            }
+        } inlineEditor: { edit in
+            NameEditor(edit: edit, commit: { name in
+                commitName(edit, to: name)
+            }, cancel: {
+                tree.inlineEdit = nil
+            })
+        }
+    }
+
+    func commitName(_ edit: InlineEdit, to name: String) {
+        let fm = FileManager.default
+        do {
+            switch edit {
+            case .rename(let url):
+                let dest = url.deletingLastPathComponent().appending(path: name)
+                try fm.moveItem(at: url, to: dest)
+            case .create(let folder, let isDirectory):
+                let dest = folder.appending(path: name)
+                if isDirectory {
+                    try fm.createDirectory(at: dest, withIntermediateDirectories: false)
+                } else {
+                    fm.createFile(atPath: dest.path, contents: nil)
+                }
+            }
+        } catch {
+            // Show the error to the user; leave inlineEdit set so they can correct the name.
+            showError(error)
+            return
+        }
+        tree.inlineEdit = nil  // dismiss; the watcher shows the result
+    }
+
+    func open(_ url: URL) { /* … */ }
+    func showError(_ error: Error) { /* … */ }
+}
+```
+
+<Tip>
+Open the target folder with `tree.setExpanded(item.url, true)` before setting `tree.inlineEdit = .create(in: item.url, …)`. If the folder is collapsed when you set `inlineEdit`, the new-entry row has no place to render and will not appear until the folder is next opened.
+</Tip>
+
+<Warning>
+You cannot rename the tree root — `item.url == tree.root` — because a root rename would change the path SwiftTree is watching. Guard against it in your context menu: `if item.url != tree.root { Button("Rename") { … } }`.
+</Warning>

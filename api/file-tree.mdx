@@ -1,0 +1,290 @@
+---
+title: "FileTree — observable file-tree model"
+sidebarTitle: "FileTree"
+description: "FileTree is the @MainActor @Observable model that owns the tree state: loaded folder contents, expansion, git status, and watching."
+---
+
+`FileTree` is the `@MainActor @Observable` class that drives everything. It holds which folders are expanded, what they contain, their git status, and the current selection. `FileTreeView` reads it to draw rows, but you can also query the model directly — status subscriptions, snapshots, and pause/resume all live here.
+
+```swift title="Declaration"
+@MainActor @Observable
+public final class FileTree
+```
+
+---
+
+## Initializer
+
+```swift title="FileTree.init"
+public convenience init(
+    root: URL,
+    options: FileTreeOptions = .init(),
+    watcher: (any FileWatching)? = nil,
+    onError: @escaping @MainActor (FileTreeError) -> Void = { _ in }
+)
+```
+
+The `root` URL is standardized at init time (no trailing slash, symlinks resolved for FSEvents matching). Options are fixed once the tree is created; to change one, create a new `FileTree`. When `watcher` is `nil`, a private `FSEventsWatcher` is created automatically.
+
+<ParamField path="root" type="URL" required>
+  The folder to display. Standardized to remove any trailing slash. Must exist at the time of init or `rootMissing` will immediately become `true`.
+</ParamField>
+
+<ParamField path="options" type="FileTreeOptions" default=".init()">
+  Configuration for behavior and appearance. Fixed after init. See [FileTreeOptions](/api/file-tree-options) for the full reference.
+</ParamField>
+
+<ParamField path="watcher" type="(any FileWatching)?" default="nil">
+  A custom file watcher. Pass `nil` and the tree creates its own private `FSEventsWatcher`. Share one `FSEventsWatcher` across multiple trees by passing the same instance here.
+</ParamField>
+
+<ParamField path="onError" type="@escaping @MainActor (FileTreeError) -> Void" default="{ _ in }">
+  Called for non-fatal errors. Invoked at most once per error condition (e.g., git unavailable, devicon font missing) until the condition clears. See `FileTreeError` for all cases.
+</ParamField>
+
+---
+
+## Properties
+
+| Property | Type | Mutable | Description |
+|---|---|---|---|
+| `root` | `URL` | read-only | The root folder passed at init, standardized to no trailing slash. |
+| `options` | `FileTreeOptions` | read-only | Configuration fixed at init time. |
+| `showHiddenFiles` | `Bool` | read-write | Show or hide dot-named entries. Toggling re-filters already-loaded listings; open folders stay open. Seeded by `options.showHiddenFiles`. |
+| `theme` | `ColorScheme` | read-write | Light or dark rendering of the tree, scoped to the tree only. Changing it re-themes in place without collapsing folders. Seeded by `options.theme`. |
+| `selection` | `URL?` | read-write | The currently highlighted row. A left click sets it; a host may also set or clear it. Setting it programmatically calls no click handler and toggles no folder. |
+| `inlineEdit` | `InlineEdit?` | read-write | Triggers the inline editor inside `FileTreeView`. `.rename(url)` draws the editor in place of that row's label. `.create(in: folder, isDirectory:)` inserts a new-entry row as the first child of the open folder. Set to `nil` to dismiss. |
+| `isPaused` | `Bool` | read-only | `true` after `pause()` is called and before `resume()` completes. |
+| `rootMissing` | `Bool` | read-only | `true` when the root folder is deleted or moved away while the tree is watching. `FileTreeView` shows a `ContentUnavailableView` in this state. |
+
+---
+
+## Methods
+
+### `children(of:)`
+
+```swift title="FileTree.children(of:)"
+public func children(of url: URL) -> [TreeNode]
+```
+
+Returns the cached directory listing for `url`. The folder is read from disk only on the first call; subsequent calls return the cached result until a file-system event invalidates it. `.DS_Store` is always excluded. Entries whose names begin with `.` are filtered out when `showHiddenFiles` is `false`.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | A folder URL inside (or equal to) `root`. |
+
+**Returns** `[TreeNode]` — the filtered, cached children of `url`.
+
+---
+
+### `isExpanded(_:)`
+
+```swift title="FileTree.isExpanded(_:)"
+public func isExpanded(_ url: URL) -> Bool
+```
+
+Returns `true` when the folder at `url` is currently open. The root folder starts expanded.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | A folder URL. |
+
+**Returns** `Bool`
+
+---
+
+### `setExpanded(_:_:)`
+
+```swift title="FileTree.setExpanded(_:_:)"
+public func setExpanded(_ url: URL, _ isExpanded: Bool)
+```
+
+Opens or closes a folder. The root can be collapsed but `FileTreeView` will still show it. Prefer calling this directly when you need to programmatically expand a path (e.g., reveal a file).
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | The folder to expand or collapse. |
+| `isExpanded` | `Bool` | `true` to open, `false` to close. |
+
+---
+
+### `status(of:)`
+
+```swift title="FileTree.status(of:)"
+public func status(of url: URL) -> GitStatus?
+```
+
+Returns the rolled-up git status for a file or folder. Returns `nil` when the path is not inside a repository, when `options.detectGit` is `false`, or when git is unavailable. Reads from the last published state — never waits on git.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | Any URL inside `root`. |
+
+**Returns** `GitStatus?`
+
+---
+
+### `branch(of:)`
+
+```swift title="FileTree.branch(of:)"
+public func branch(of url: URL) -> String?
+```
+
+Returns the current branch name for a repo-root folder, or the short SHA when HEAD is detached. Returns `nil` when `options.showBranchNames` is `false` or the folder is not the root of a tracked repository.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | A folder URL — typically a repo root. |
+
+**Returns** `String?` — branch name, short SHA, or `nil`.
+
+---
+
+### `info(for:)`
+
+```swift title="FileTree.info(for:)"
+public func info(for url: URL) -> TreeItemInfo
+```
+
+Builds a `TreeItemInfo` snapshot from the currently cached state. Never waits on git. This is the same value passed to `onLeftClick` and `rightClickMenu` in `FileTreeView`.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `url` | `URL` | Any URL inside `root` (or `root` itself). |
+
+**Returns** `TreeItemInfo` with `url`, `relativePath`, `isDirectory`, `isSymlink`, `repoRoot`, and `gitStatus`.
+
+---
+
+### `register(path:callback:)`
+
+```swift title="FileTree.register(path:callback:)"
+public func register(
+    path: URL,
+    callback: @escaping @MainActor ([URL: GitStatus]) -> Void
+) throws -> StatusSubscription
+```
+
+Subscribes to status changes under `path`. The first call delivers a map of every file and folder under `path` with its current status. Subsequent calls deliver only the entries that changed. Returns a `StatusSubscription` token; pass it to `unregister(_:)` to stop receiving callbacks.
+
+When `options.detectGit` is `false`, `register` succeeds but the callback is never invoked.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `path` | `URL` | A path inside `root` to watch. |
+| `callback` | `@MainActor ([URL: GitStatus]) -> Void` | Invoked on the main actor. First call: all statuses. Subsequent calls: only changed entries. |
+
+**Returns** `StatusSubscription` — an opaque token to pass to `unregister(_:)`.
+
+**Throws** `FileTreeError.pathOutsideRoot` when `path` is not inside `root`. `FileTreeError.gitDetectionDisabled` when `options.detectGit` is `false`.
+
+---
+
+### `unregister(_:)`
+
+```swift title="FileTree.unregister(_:)"
+public func unregister(_ subscription: StatusSubscription)
+```
+
+Cancels a subscription previously returned by `register(path:callback:)`. Safe to call with an already-cancelled subscription.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `subscription` | `StatusSubscription` | The token returned by `register(path:callback:)`. |
+
+---
+
+### `snapshot(of:)`
+
+```swift title="FileTree.snapshot(of:)"
+public func snapshot(of path: URL) async throws -> [URL: GitStatus]
+```
+
+Returns the current status of every file and folder under `path`, including tracked files that have been deleted from disk. Internally runs `git ls-files` via the git engine, so call this on demand rather than in a tight loop.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `path` | `URL` | A path inside `root`. |
+
+**Returns** `[URL: GitStatus]` — a full map of statuses, including deleted tracked files.
+
+**Throws** `FileTreeError.pathOutsideRoot` when `path` is not inside `root`. `FileTreeError.gitDetectionDisabled` when `options.detectGit` is `false`.
+
+---
+
+### `pause()`
+
+```swift title="FileTree.pause()"
+public func pause()
+```
+
+Stops following file-system changes. The folder tree is frozen in its current state. The git-directory watch continues so branch and status remain live. Call `resume()` to start watching again. Expansion state is preserved across a pause/resume cycle.
+
+---
+
+### `resume()`
+
+```swift title="FileTree.resume()"
+public func resume() async
+```
+
+Re-reads the tree, drops any open folders that no longer exist on disk, keeps all other folders open, and restarts the file-system watcher. Has no effect if the tree is not paused.
+
+---
+
+## Example
+
+```swift title="Sidebar.swift"
+import SwiftTree
+import SwiftUI
+
+struct Sidebar: View {
+    @State private var tree: FileTree
+
+    init(projectURL: URL) {
+        var options = FileTreeOptions()
+        options.theme = .dark
+        options.showBranchNames = true
+        options.fontSize = 13
+
+        _tree = State(
+            initialValue: FileTree(
+                root: projectURL,
+                options: options,
+                onError: { error in
+                    // Surface non-fatal errors (git unavailable, devicons missing, etc.)
+                    print("SwiftTree error:", error)
+                }
+            )
+        )
+    }
+
+    var body: some View {
+        FileTreeView(tree: tree) { item in
+            if !item.isDirectory {
+                openFile(item.url)
+            }
+        }
+    }
+
+    func openFile(_ url: URL) { /* … */ }
+}
+```

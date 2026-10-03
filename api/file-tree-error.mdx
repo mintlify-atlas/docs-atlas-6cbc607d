@@ -1,0 +1,81 @@
+---
+title: "FileTreeError — non-fatal error cases"
+sidebarTitle: "FileTreeError"
+description: "FileTreeError describes non-fatal errors reported via onError or thrown by the status API. Most errors occur once and recover automatically."
+---
+
+`FileTreeError` describes non-fatal errors that SwiftTree surfaces either through the `onError` callback you pass to `FileTree.init`, or as thrown errors from the status API. Most cases are reported at most once and the tree recovers without any action from the host. Understanding each case lets you log or display the right message and know when to expect automatic recovery.
+
+## Declaration
+
+```swift
+public enum FileTreeError: Error, Equatable, Sendable
+```
+
+## Cases
+
+| Case | When reported | How many times | Recovery |
+|---|---|---|---|
+| `.gitUnavailable` | No usable `git` binary was found on `PATH`. | Once, from `FileTree.init`. | The tree shows no status colors. Manual recovery requires a new `FileTree`. |
+| `.gitFailed(repo: URL, message: String)` | A `git` command for one specific repo failed (e.g. corrupt index, permission error). | Once per repo, until the command succeeds again. Other repos are unaffected. | Automatic — the tree retries on the next file change or after `resume()`. |
+| `.gitDetectionDisabled` | `snapshot(of:)` was called but `FileTreeOptions.detectGit` is `false`. | Thrown, not delivered via `onError`. | Not applicable — this is a programming error. Enable `detectGit` or remove the `snapshot` call. |
+| `.pathOutsideRoot(_ url: URL)` | `register(path:callback:)` or `snapshot(of:)` was called with a URL that is not the root or a descendant of it. | Thrown, not delivered via `onError`. | Not applicable — pass a URL within the tree root. |
+| `.devIconsUnavailable` | `useDevIcons` is `true` but the devicon font file is missing or unreadable. | Once, from `FileTree.init`. | File rows fall back to the generic `doc` SF Symbol. Manual recovery requires a new `FileTree` after adding the font. |
+
+## Thrown vs. delivered via onError
+
+Two cases are **thrown** rather than delivered through the callback:
+
+- `.gitDetectionDisabled` — thrown by `snapshot(of:)` only. `register(path:callback:)` with `detectGit = false` succeeds without throwing; it simply never calls back.
+- `.pathOutsideRoot` — thrown by both `register(path:callback:)` and `snapshot(of:)`.
+
+All other cases arrive through the `onError` closure you provide to `FileTree.init`.
+
+<Tip>
+  `.gitFailed` recovers automatically. When the next file-system change fires (or after `await tree.resume()`), SwiftTree re-runs the git command for that repo. If it succeeds, status colors return and no further error is reported unless the command fails again.
+</Tip>
+
+## Handling errors
+
+```swift title="Logging and displaying FileTreeError in onError"
+@State private var treeErrorMessage: String? = nil
+
+@State private var tree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/project"),
+    options: options,
+    onError: { [weak self] error in
+        switch error {
+        case .gitUnavailable:
+            self?.treeErrorMessage = "git not found on PATH — status colors disabled."
+
+        case .gitFailed(let repo, let message):
+            // Transient; the tree will retry automatically.
+            print("git failed for \(repo.lastPathComponent): \(message)")
+
+        case .devIconsUnavailable:
+            // File icons fall back to the generic doc symbol — not critical.
+            print("DevIcons font missing; run `make fonts` to enable file-type icons.")
+
+        // .gitDetectionDisabled and .pathOutsideRoot are thrown, not delivered here.
+        default:
+            break
+        }
+    }
+)
+```
+
+```swift title="Using the status API — handling thrown errors"
+do {
+    // snapshot throws .gitDetectionDisabled if detectGit is false.
+    let statuses = try await tree.snapshot(of: projectRoot)
+    for (url, status) in statuses {
+        print(url.lastPathComponent, status)
+    }
+} catch FileTreeError.gitDetectionDisabled {
+    print("Enable detectGit in FileTreeOptions to use the status API.")
+} catch FileTreeError.pathOutsideRoot(let url) {
+    print("\(url.path) is not inside the tree root.")
+} catch {
+    print("Unexpected error:", error)
+}
+```

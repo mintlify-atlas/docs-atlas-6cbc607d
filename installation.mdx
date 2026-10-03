@@ -1,0 +1,95 @@
+---
+title: "Add SwiftTree to a macOS SwiftUI App with Swift PM"
+sidebarTitle: "Installation"
+description: "Add SwiftTree to your app via Swift Package Manager, fetch the devicon font with make fonts, and verify the build in Xcode or the terminal."
+---
+
+Swift Package Manager is the only distribution channel for SwiftTree. There is no CocoaPods podspec, no Carthage framework, and no binary XCFramework — the package is source-only and carries no third-party dependencies, so adding it never pulls anything extra into your app's package graph.
+
+## Steps
+
+<Steps>
+  <Step title="Add the package dependency to Package.swift">
+    Open your app's `Package.swift` and add SwiftTree to the top-level `dependencies` array:
+
+    ```swift Package.swift
+    .package(url: "https://github.com/contexthub-dev/swift-tree.git", from: "0.4.0")
+    ```
+  </Step>
+  <Step title="Add SwiftTree to your target's dependencies">
+    Reference the `"SwiftTree"` product in every target that imports it. A minimal `Package.swift` looks like this:
+
+    ```swift Package.swift
+    // swift-tools-version: 6.0
+    import PackageDescription
+
+    let package = Package(
+      name: "MyApp",
+      platforms: [.macOS(.v14)],
+      products: [
+        .executable(name: "MyApp", targets: ["MyApp"])
+      ],
+      dependencies: [
+        .package(url: "https://github.com/contexthub-dev/swift-tree.git", from: "0.4.0")
+      ],
+      targets: [
+        .executableTarget(
+          name: "MyApp",
+          dependencies: [
+            .product(name: "SwiftTree", package: "swift-tree")
+          ]
+        )
+      ]
+    )
+    ```
+  </Step>
+  <Step title="Fetch the devicon font">
+    SwiftTree uses the [devicon](https://github.com/devicons/devicon) font for file-type glyphs. The font is **not** committed to `main` — each release tag carries it, but your local clone does not. Run the provided Makefile target from the root of the SwiftTree source checkout to download it:
+
+    ```sh Terminal
+    make fonts
+    ```
+
+    This runs `scripts/fetch-devicons.sh`, which fetches the latest devicon release from GitHub and writes three files into `Sources/SwiftTree/Resources/DevIcons/`:
+
+    | File | Purpose |
+    |------|---------|
+    | `devicon.ttf` | The TrueType font containing all glyphs |
+    | `devicon-map.json` | A generated map from file extension to Unicode code point |
+    | `LICENSE-devicon` | The MIT license for the devicon project |
+
+    That directory is gitignored. CI runs `make fonts` automatically before building.
+
+    <Warning>
+      Without running `make fonts` the package still compiles and the tree still works — but every file row shows the generic `doc` SF Symbol instead of a language-specific glyph, and `FileTree` calls your `onError` handler once with `.devIconsUnavailable`. If you see only document icons after installing, this is the most likely cause.
+    </Warning>
+  </Step>
+  <Step title="Build">
+    Build from the command line or from Xcode:
+
+    ```sh Terminal
+    swift build
+    ```
+
+    In Xcode, select your scheme and press **⌘B**. Resolve the package dependency first if Xcode prompts you.
+
+    <Info>
+      If your app is AppKit-based rather than pure SwiftUI, embed `FileTreeView` with a standard `NSHostingView`:
+
+      ```swift AppKitHost.swift
+      import AppKit
+      import SwiftUI
+      import SwiftTree
+
+      final class SidebarViewController: NSViewController {
+        private let tree = FileTree(root: URL(fileURLWithPath: "/path/to/project"))
+
+        override func loadView() {
+          let hosting = NSHostingView(rootView: FileTreeView(tree: tree))
+          self.view = hosting
+        }
+      }
+      ```
+    </Info>
+  </Step>
+</Steps>

@@ -1,0 +1,142 @@
+---
+title: "Customize appearance, colors, and behavior"
+sidebarTitle: "Customization"
+description: "Configure SwiftTree with FileTreeOptions: status colors, themes, devicon glyphs, font, indent guides, and which properties can change at runtime."
+---
+
+`FileTreeOptions` is the single place to configure a file tree. You set your options before creating a `FileTree`, and they are fixed for the lifetime of that instance — the options struct is stored as `tree.options` and does not change. To try a different configuration, create a new `FileTree` with the updated options. A handful of properties — `showHiddenFiles`, `theme`, `selection`, `inlineEdit`, `setExpanded`, and `pause`/`resume` — can be changed on the live tree at any time without rebuilding.
+
+## FileTreeOptions reference
+
+| Option | Default | Effect |
+|---|---|---|
+| `detectGit` | `true` | `false`: no status colors, no branch labels, and no `git` command ever runs. |
+| `canHaveMultipleGitRepositories` | `true` | `false`: nested repos are ignored; everything resolves against the repo that contains the root. |
+| `showHiddenFiles` | `true` | Initial value of `tree.showHiddenFiles`. Dot-named entries are hidden when `false`; `.DS_Store` is always hidden. |
+| `showBranchNames` | `false` | Label each repo-root folder with its current branch, or the short SHA when HEAD is detached. |
+| `theme` | `.dark` | `.light` or `.dark` rendering for the tree only, independent of the system appearance. Seeds `tree.theme`. |
+| `showIndentGuides` | `true` | Vertical lines beside the contents of each open folder, aligned under the folder's icon. |
+| `fontSize` | `12` | Point size of row names. Icons, branch labels, row height, and indent all scale with it. Clamped to 8–32. |
+| `fontFamily` | `nil` | Font family for row names and branch labels. `nil` (or an uninstalled family) uses the system font. Devicon glyphs always use their own font. |
+| `useDevIcons` | `true` | Devicon file-type glyphs on file rows. Unmapped files, folders, and symlinks use SF Symbols. Requires `make fonts` before building. |
+| `colors` | `StatusColors.zed` | Text color per git status. See [StatusColors](#statuscolors) below. |
+
+## StatusColors
+
+`StatusColors` controls the text color applied to each git status in the tree. Unmodified rows always use the default text color and are not configurable.
+
+### Presets and constructors
+
+| Form | Effect |
+|---|---|
+| `StatusColors.zed` | Zed's One Dark / One Light adaptive colors: amber for modified, green for untracked, blue for staged, red for deleted, gray for ignored. Switches with the system appearance. |
+| `StatusColors(modified:untracked:staged:deleted:ignored:)` | Set every status color explicitly. |
+| `StatusColors(all: color)` | One color for modified, untracked, staged, and deleted. `ignored` keeps Zed's muted gray. |
+| `options.colors.staged = .blue` | Override a single status color on an existing `StatusColors` value. |
+
+### Custom colors example
+
+```swift title="CustomColors.swift"
+import SwiftTree
+import SwiftUI
+
+var options = FileTreeOptions()
+
+// Option 1: Use a single accent color for all change types.
+options.colors = StatusColors(all: .orange)
+
+// Option 2: Set each status color individually.
+options.colors = StatusColors(
+    modified:  .yellow,
+    untracked: .green,
+    staged:    .blue,
+    deleted:   .red,
+    ignored:   .gray
+)
+
+// Option 3: Start from .zed and tweak one status.
+options.colors = StatusColors.zed
+options.colors.staged = .purple
+
+let tree = FileTree(root: projectURL, options: options)
+```
+
+## Runtime-changeable properties
+
+These properties can be updated on a live `FileTree` without creating a new instance. SwiftUI re-renders only what changed.
+
+| Property / Method | Effect |
+|---|---|
+| `tree.showHiddenFiles` | Show or hide dot-named entries. Open folders stay open and their loaded listings are re-filtered immediately. |
+| `tree.theme` | Switch between `.dark` and `.light`. Open folders and the current selection are preserved. |
+| `tree.selection` | Highlight a row programmatically. Does not call `onLeftClick` and does not toggle folder expansion. |
+| `tree.inlineEdit` | Set to `.rename(url)` or `.create(in: folder, isDirectory:)` to show the inline editor, or `nil` to dismiss it. |
+| `tree.setExpanded(_:_:)` | Open or close any folder. The root starts open; all others start closed. |
+| `tree.pause()` / `await tree.resume()` | Stop and restart file watching (see the [File Watching guide](/guides/file-watching)). |
+
+## Theme
+
+The `theme` option accepts `.dark` or `.light`, independently of the macOS system appearance or the host window's appearance. `FileTreeView` applies it by injecting `.environment(\.colorScheme, tree.theme)` scoped to the tree's own view hierarchy — your window's chrome and other views are unaffected.
+
+```swift title="Theme.swift"
+var options = FileTreeOptions()
+options.theme = .light   // start in light mode regardless of system setting
+
+let tree = FileTree(root: projectURL, options: options)
+
+// Switch to dark at runtime — no rebuild needed.
+tree.theme = .dark
+```
+
+<Note>
+If you want the rest of your window to match the tree's theme, apply `.preferredColorScheme(tree.theme)` to your top-level view. The demo app does this so the sidebar and the settings form always agree.
+</Note>
+
+## DevIcons
+
+When `useDevIcons` is `true` (the default), file rows display glyphs from the [devicon](https://github.com/devicons/devicon) font, keyed on the file extension. Unmapped files show the `doc` SF Symbol. Folders always show `folder` or `folder.fill` (open), and symlinks always show `link` — devicon glyphs are never used for those.
+
+The devicon font is not committed to the repository. Run `make fonts` before building to download it:
+
+```bash
+make fonts   # downloads into Sources/SwiftTree/Resources/DevIcons (gitignored)
+```
+
+Without the font, everything still compiles and runs. `FileTree` reports `.devIconsUnavailable` once through `onError`, and all file rows fall back to the generic `doc` icon.
+
+<Tip>
+CI runs `make fonts` automatically before the test suite. If you're distributing a fork or embedding SwiftTree in your own Swift package, make sure your build process fetches the font or sets `options.useDevIcons = false`.
+</Tip>
+
+## Full configuration example
+
+```swift title="FullOptions.swift"
+import SwiftTree
+import SwiftUI
+
+var options = FileTreeOptions()
+options.detectGit                      = true
+options.canHaveMultipleGitRepositories = true
+options.showHiddenFiles                = false
+options.showBranchNames                = true
+options.theme                          = .dark
+options.showIndentGuides               = true
+options.fontSize                       = 13        // clamped to 8-32
+options.fontFamily                     = "PT Sans" // nil falls back to system font
+options.useDevIcons                    = true
+options.colors                         = StatusColors.zed
+options.colors.ignored                 = .secondary // override just one status
+
+let tree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/project"),
+    options: options,
+    onError: { error in
+        switch error {
+        case .gitUnavailable:       print("git not found on PATH")
+        case .gitFailed(_, let m):  print("git error:", m)
+        case .devIconsUnavailable:  print("devicon font missing; run make fonts")
+        default:                    break
+        }
+    }
+)
+```

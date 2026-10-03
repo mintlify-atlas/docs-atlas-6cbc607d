@@ -1,0 +1,168 @@
+---
+title: "File watching with FSEvents in SwiftTree"
+sidebarTitle: "File Watching"
+description: "How SwiftTree uses FSEvents to track filesystem and git changes, share a watcher across trees, pause and resume watching, and implement a custom watcher."
+---
+
+SwiftTree keeps the tree in sync with the filesystem and with git automatically, without any polling. Under the hood it uses FSEvents — macOS's kernel-level filesystem notification API — through a thin `FileWatching` protocol. By default each `FileTree` creates its own `FSEventsWatcher`, which is the simplest setup. When you have multiple trees open at once, you can share a single `FSEventsWatcher` across all of them to reduce the number of kernel-level event streams your process holds.
+
+## Default watcher
+
+Unless you pass a `watcher` argument to `FileTree.init`, the tree creates its own `FSEventsWatcher` with a latency of `0.3` seconds. That latency controls how long FSEvents batches changes before delivering a single notification — a burst of writes from a checkout or a dependency install arrives as one update rather than hundreds.
+
+```swift title="DefaultWatcher.swift"
+import SwiftTree
+
+// The tree creates its own FSEventsWatcher(latency: 0.3) internally.
+let tree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/project"),
+    onError: { error in print("swift-tree:", error) }
+)
+```
+
+## Sharing a watcher
+
+Pass any value conforming to `FileWatching` to `FileTree.init(watcher:)`. The most common case is sharing one `FSEventsWatcher` across multiple `FileTree` instances, for example in a multi-root IDE where each open folder has its own tree:
+
+```swift title="SharedWatcher.swift"
+import SwiftTree
+
+// One FSEventsWatcher shared by every tree in your app.
+let sharedWatcher = FSEventsWatcher(latency: 0.2)
+
+let projectTree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/project"),
+    watcher: sharedWatcher
+)
+
+let frameworkTree = FileTree(
+    root: URL(fileURLWithPath: "/path/to/framework"),
+    watcher: sharedWatcher
+)
+```
+
+<Tip>
+For apps with many open folders, sharing one `FSEventsWatcher` meaningfully reduces kernel-level stream overhead. FSEvents streams are not free — each one registers a separate kqueue-backed source with the kernel. Sharing a watcher means one stream covers all watched paths.
+</Tip>
+
+## FSEventsWatcher parameters
+
+`FSEventsWatcher` has a single configuration parameter:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `latency` | `0.3` s | How long FSEvents batches filesystem events before delivering one `FileChangeBatch`. Lower values feel more responsive; higher values coalesce burst operations like `npm install` into fewer updates. |
+
+## Pause and resume
+
+You can temporarily stop the tree from reacting to filesystem changes with `pause()`. The git-dir watch — which tracks index changes for git status coloring — stays active during a pause, so git status still updates even when file watching is paused. Call `await resume()` to re-read the tree and restart watching.
+
+```swift title="PauseResume.swift"
+import SwiftTree
+import SwiftUI
+
+struct ToolbarControls: View {
+    let tree: FileTree
+
+    var body: some View {
+        Button(
+            tree.isPaused ? "Resume Watching" : "Pause Watching",
+            systemImage: tree.isPaused ? "play.fill" : "pause.fill"
+        ) {
+            Task {
+                if tree.isPaused {
+                    await tree.resume()
+                } else {
+                    tree.pause()
+                }
+            }
+        }
+    }
+}
+```
+
+### What pause and resume do
+
+| Operation | Effect |
+|---|---|
+| `tree.pause()` | Cancels the FSEvents watch. The tree stops responding to file changes. Git-dir watch stays on. `tree.isPaused` becomes `true`. |
+| `await tree.resume()` | Re-reads every previously open folder from disk, drops folders that no longer exist, keeps the rest expanded, restarts FSEvents watching, and triggers a fresh git status pass. `tree.isPaused` becomes `false`. |
+| `tree.isPaused` | `true` while paused. |
+| `tree.rootMissing` | Set to `true` when the root folder itself is deleted or moved while watched. Also checked on `resume()`. |
+
+<Note>
+`resume()` is `async` because it re-reads the tree and waits for the git engine to refresh. Call it inside a `Task { }` from synchronous contexts.
+</Note>
+
+## The FileWatching protocol
+
+If FSEvents doesn't fit your needs — for example in tests, or when your app already has its own file-watching infrastructure — implement `FileWatching` and pass it to `FileTree`:
+
+```swift title="FileWatching.swift"
+public protocol FileWatching: AnyObject, Sendable {
+    func watch(
+        _ paths: [URL],
+        onChange: @escaping @Sendable (FileChangeBatch) -> Void
+    ) -> WatchToken
+}
+```
+
+### FileChangeBatch
+
+Each call to `onChange` delivers a `FileChangeBatch`:
+
+| Property | Type | Description |
+|---|---|---|
+| `paths` | `[URL]` | Changed files and folders. Either spelling of a symlinked root (e.g. `/var` or `/private/var`) is accepted. |
+| `rootChanged` | `Bool` | `true` when a watched path itself was deleted, moved, or recreated. Triggers `tree.rootMissing` to be re-evaluated. |
+
+### WatchToken
+
+`watch(_:onChange:)` returns a `WatchToken`. Cancelling the token ends the subscription. Dropping the last strong reference to the token also cancels it — you never need to keep a separate cancel flag.
+
+```swift title="WatchToken.swift"
+let token = watcher.watch([folderURL]) { batch in
+    print("Changed paths:", batch.paths)
+    if batch.rootChanged { print("Root was deleted or moved") }
+}
+
+// Cancel explicitly:
+token.cancel()
+
+// Or let the token go out of scope — it cancels on deinit.
+```
+
+### Custom watcher example
+
+```swift title="CustomWatcher.swift"
+import SwiftTree
+import Foundation
+
+// A minimal stub watcher useful in unit tests.
+final class MockWatcher: FileWatching {
+    var onChange: (@Sendable (FileChangeBatch) -> Void)?
+
+    func watch(
+        _ paths: [URL],
+        onChange: @escaping @Sendable (FileChangeBatch) -> Void
+    ) -> WatchToken {
+        self.onChange = onChange
+        return WatchToken { [weak self] in self?.onChange = nil }
+    }
+
+    func simulate(change at: URL) {
+        onChange?(FileChangeBatch(paths: [at]))
+    }
+}
+
+// Use it in a test or in your app:
+let mock = MockWatcher()
+let tree = FileTree(root: projectURL, watcher: mock)
+
+// Simulate a file change in tests:
+mock.simulate(change: projectURL.appending(path: "Package.swift"))
+```
+
+<Note>
+FSEvents reports resolved paths like `/private/var/folders/…` even when you watch `/var/folders/…`. SwiftTree maps these back to the spelling you passed as `root`, so `TreeItemInfo.url` and all relative paths always use your original URL spelling.
+</Note>

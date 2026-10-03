@@ -1,0 +1,67 @@
+---
+title: "Explore SwiftTree options with the demo app"
+sidebarTitle: "Demo App"
+description: "The demo/ app lets you try every FileTreeOptions setting interactively against any folder on your Mac, with no code changes needed."
+---
+
+The `demo/` directory is a standalone macOS app with its own SwiftPM package — it is a path dependency on the library and is never resolved by your own project. Open any folder, tweak every `FileTreeOptions` knob in the settings panes, and click **Apply** to rebuild the tree with the new configuration. Use it to preview git status colors, devicon glyphs, font choices, and watcher latency before wiring anything into your own app.
+
+## Running the demo
+
+Both commands below build the demo package from source and launch it. The first shows a folder picker on startup; the second bypasses the picker and opens the given path directly.
+
+```bash title="Launch the demo"
+make demo                        # opens a folder picker on launch
+make demo ROOT=~/code/my-repo   # opens that folder directly
+```
+
+<Note>
+  Pass `ROOT` as an absolute or `~`-prefixed path. Passing a bare relative path
+  would be treated by AppKit as a file-open argument and no window would appear.
+</Note>
+
+## What you can configure
+
+The demo window is split into three columns: a file tree on the left, a tabbed settings form in the centre, and an inspector on the right. The table below maps each panel to the controls it exposes.
+
+| Panel | What you can configure |
+|---|---|
+| Settings → Tree | Show hidden files, Detect git, Multiple git repositories, Show branch names, Dark theme, Show indent guides, Use DevIcons, Font size (8–32 pt), Font family |
+| Settings → Colors | Single color for every change, or a color per status (modified, untracked, staged, deleted, ignored); Reset colors |
+| Settings → Watcher | FSEvents latency (0.05–5 s) |
+| Toolbar | Choose Folder…, Pause / Resume watching |
+| Tree (interactions) | Left click selects (folders toggle); right click shows New File, New Folder, Rename (named inline: Enter commits, Escape cancels), Reveal in Finder and Copy Relative Path |
+| Inspector | The last-clicked item's `TreeItemInfo`, and every status callback as it arrives |
+| Footer | Watching state, or the last `FileTreeError` |
+
+## Inspector panel
+
+The **Inspector** panel on the right side of the window has two sections. **Last clicked** shows the full `TreeItemInfo` for the most recently clicked row:
+
+| Field | Description |
+|---|---|
+| `url` | Absolute URL of the item |
+| `relativePath` | Path relative to the tree root |
+| `kind` | `File` or `Folder` |
+| `isSymlink` | Whether the entry is a symbolic link |
+| `repoRoot` | Absolute path of the enclosing git repository, or `none` |
+| `gitStatus` | The item's current git status, or `none` |
+
+**Status callbacks** logs every call to the `register` subscription as it arrives — timestamp and entry count — newest at the bottom (up to 200 lines). This lets you watch git status updates propagate in real time as you stage or modify files in the chosen folder.
+
+## Footer
+
+The footer bar at the bottom of the settings form shows the current watching state (`Watching for changes` or `Watching paused`) when everything is healthy. If a `FileTreeError` is reported — for example `.gitUnavailable`, `.gitFailed`, or `.devIconsUnavailable` — the footer switches to a red warning label with the error description and the time it occurred.
+
+<Note>
+  `make demo-test` builds the demo package and runs its tests without ever
+  opening a window. This is the target used as the CI gate for the demo; running
+  plain `make demo` in CI would open a window and hang indefinitely.
+</Note>
+
+<Tip>
+  Use the demo's **Settings → Colors** pane to preview every git status color
+  combination, and toggle **Use DevIcons** on and off to compare devicon glyphs
+  against the generic SF Symbol fallback — before committing either choice to
+  your own app.
+</Tip>

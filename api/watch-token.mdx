@@ -1,0 +1,131 @@
+---
+title: "WatchToken — cancellable file watch subscription"
+sidebarTitle: "WatchToken"
+description: "WatchToken is the opaque cancellation handle for a FileWatching subscription. Drop it or call cancel() to stop watching; both paths are safe to use."
+---
+
+`WatchToken` is the opaque handle returned by `FileWatching.watch`. Holding a strong reference to the token keeps the underlying watch subscription active; dropping the last reference — or calling `cancel()` explicitly — tears it down. `FileTree` manages its own internal token, but if you implement a custom `FileWatching` conformance you will construct tokens directly.
+
+## Declaration
+
+```swift
+public final class WatchToken: Sendable
+```
+
+`WatchToken` is a `final class`, so it has reference semantics and a single owner at any given time. It is `Sendable` and can be stored or passed across concurrency domains safely.
+
+---
+
+## Initializer
+
+```swift
+init(onCancel: @escaping @Sendable () -> Void)
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `onCancel` | `@escaping @Sendable () -> Void` | Called exactly once when the token is cancelled, either by `cancel()` or by `deinit`. Use this closure to stop the underlying stream or release any resources tied to the watch. |
+
+<Note>
+`onCancel` is guaranteed to run at most once. If `cancel()` is called and then the token is later deallocated, `onCancel` is not called a second time.
+</Note>
+
+---
+
+## cancel()
+
+```swift
+public func cancel()
+```
+
+Immediately invokes the `onCancel` closure and clears it, ensuring it will never be called again. Calling `cancel()` more than once is harmless — subsequent calls are no-ops.
+
+---
+
+## Automatic cancellation
+
+`WatchToken` calls `cancel()` from its `deinit`. This means:
+
+- Letting a token go out of scope cancels the subscription with no extra code.
+- Assigning `nil` to a stored optional token cancels it at that exact point.
+- There is no resource leak if you forget to call `cancel()` manually.
+
+---
+
+## Lifetime management
+
+How you store a `WatchToken` determines how long the subscription lives.
+
+### Keep the watch alive
+
+Store the token as a property on a long-lived object:
+
+```swift title="Watcher.swift"
+import SwiftTree
+
+final class MyWatcher {
+    private var token: WatchToken?
+
+    func startWatching(root: URL, watcher: any FileWatching) {
+        token = watcher.watch([root]) { batch in
+            print("Changed paths:", batch.paths)
+            if batch.rootChanged {
+                print("Root itself was moved or deleted")
+            }
+        }
+    }
+
+    func stopWatching() {
+        // Explicit cancellation — or just let `token` go out of scope.
+        token?.cancel()
+        token = nil
+    }
+}
+```
+
+### Cancel by assignment
+
+```swift title="CancelByAssignment.swift"
+import SwiftTree
+
+var token: WatchToken? = watcher.watch([root]) { batch in
+    handleBatch(batch)
+}
+
+// Cancel by clearing the reference:
+token = nil
+```
+
+### Scope-based cancellation
+
+```swift title="ScopedWatch.swift"
+import SwiftTree
+
+func performOneTimeRead(root: URL, watcher: any FileWatching) {
+    // Token is a local — watch is cancelled when the function returns.
+    let token = watcher.watch([root]) { batch in
+        process(batch)
+    }
+    doWork()
+    // token goes out of scope here; onCancel runs automatically.
+    _ = token  // silence "unused" warning if needed
+}
+```
+
+---
+
+## Relationship to FileTree
+
+`FileTree` creates and holds its own internal `WatchToken` for the active tree watch. You never interact with it directly, but its lifetime mirrors the watching state:
+
+| `FileTree` action | Effect on the internal token |
+|---|---|
+| `FileTree.init(…)` | A `WatchToken` is created and stored internally. |
+| `tree.pause()` | The internal token is cancelled and released. |
+| `await tree.resume()` | A new `WatchToken` is created and stored. |
+
+<Note>
+`tree.pause()` cancels the file-watching subscription but does not affect git status polling — git status continues to update while the tree is paused.
+</Note>
